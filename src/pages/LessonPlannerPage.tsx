@@ -27,7 +27,11 @@ export default function LessonPlannerPage() {
     }
     let cancelled = false;
     const run = async () => {
-      const lessonData = await generateLesson(student!, topic || uploadedDoc?.fileName || 'General Topic', uploadedDoc || undefined);
+      const lessonData = await generateLesson(
+        student!,
+        topic || uploadedDoc?.fileName || 'General Topic',
+        uploadedDoc || undefined
+      );
       if (!cancelled) setLocalLesson(lessonData);
     };
     run();
@@ -41,10 +45,13 @@ export default function LessonPlannerPage() {
         return s + 1;
       });
     }, 1000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [student, topic, uploadedDoc, navigate]);
 
-  const allDone = currentStep >= processingSteps.length - 1 && lesson;
+  const allDone = currentStep >= processingSteps.length - 1 && lesson !== null;
 
   const handleStart = () => {
     if (lesson) {
@@ -88,7 +95,13 @@ export default function LessonPlannerPage() {
                         : 'bg-ink-700/40 text-slate-500'
                     }`}
                   >
-                    {done ? <Check className="w-5 h-5" /> : active ? <Loader2 className="w-5 h-5 animate-spin" /> : <step.icon className="w-5 h-5" />}
+                    {done ? (
+                      <Check className="w-5 h-5" />
+                    ) : active ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <step.icon className="w-5 h-5" />
+                    )}
                   </div>
                   <div className="flex-1">
                     <div className={`font-semibold ${done || active ? 'text-white' : 'text-slate-500'}`}>
