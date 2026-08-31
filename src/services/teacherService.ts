@@ -53,24 +53,40 @@ function createFallbackResponse(message: string): TeachingResponse {
   };
 }
 
-function normalizeSuggestedVisual(value: unknown): SuggestedVisual {
+function subjectVisualFallback(subject: SubjectType): SuggestedVisual {
+  const visualBySubject: Record<SubjectType, SuggestedVisual> = {
+    Mathematics: { type: 'equation', content: 'Known values → substitution → solve step by step', description: 'Work through the equation one operation at a time.' },
+    Physics: { type: 'diagram', content: '[Object]  → Force / motion / energy →  [Result]', description: 'Label the quantities and directions involved.' },
+    Biology: { type: 'flowchart', content: 'Input → cell or organ system process → output', description: 'Follow the biological process in order.' },
+    History: { type: 'timeline', content: 'Cause → key event → consequence', description: 'Place events in chronological order.' },
+    Programming: { type: 'code', content: '// input\n// process\n// output', description: 'Trace the program from input to output.' },
+    General: { type: 'diagram', content: 'Core idea → supporting ideas → application', description: 'Connect the central concept to its parts.' },
+  };
+  return visualBySubject[subject];
+}
+
+function normalizeSuggestedVisual(value: unknown, subject: SubjectType = 'General'): SuggestedVisual {
   if (value && typeof value === 'object') {
     const visual = value as Partial<SuggestedVisual>;
     const validTypes: SuggestedVisual['type'][] = ['equation', 'diagram', 'timeline', 'code', 'flowchart'];
     if (validTypes.includes(visual.type as SuggestedVisual['type']) && typeof visual.content === 'string') {
-      return {
-        type: visual.type as SuggestedVisual['type'],
-        content: visual.content,
-        description: visual.description,
+      const requestedType = visual.type as SuggestedVisual['type'];
+      const preferredTypes: Record<SubjectType, SuggestedVisual['type'][]> = {
+        Mathematics: ['equation'],
+        Physics: ['diagram', 'flowchart'],
+        Biology: ['flowchart', 'diagram'],
+        History: ['timeline'],
+        Programming: ['code'],
+        General: ['diagram', 'flowchart'],
       };
+      if (!preferredTypes[subject].includes(requestedType)) {
+        return subjectVisualFallback(subject);
+      }
+      return { type: requestedType, content: visual.content, description: visual.description };
     }
   }
 
-  return {
-    type: 'diagram',
-    content: 'Connect what you already know to the current concept step by step.',
-    description: 'A simple visual guide for the current concept',
-  };
+  return subjectVisualFallback(subject);
 }
 
 function resolveLanguage(student: Student, preferredLanguage?: Language, userMessage?: string): Language {
@@ -233,7 +249,7 @@ export async function continueTeachingTurn(
   chatHistory: ChatMessage[] = [],
   userMessage?: string,
   retrievedContext?: string[],
-  preferredLanguage?: Language
+  language?: Language
 ): Promise<TeachingResponse> {
   try {
     // Validate inputs
@@ -250,7 +266,7 @@ export async function continueTeachingTurn(
       throw new Error('VITE_GEMINI_API_KEY is not configured');
     }
 
-    const activeLanguage = resolveLanguage(student, preferredLanguage, userMessage);
+    const activeLanguage = resolveLanguage(student, language, userMessage);
 
     // Build the system prompt with pedagogical context
     const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage);
@@ -291,7 +307,7 @@ export async function continueTeachingTurn(
       try {
         const jsonData = JSON.parse(responseText) as Partial<TeachingResponse>;
         const teacherMessage = jsonData.teacherMessage || jsonData.text || '';
-        const suggestedVisual = normalizeSuggestedVisual(jsonData.suggestedVisual || jsonData.visual);
+        const suggestedVisual = normalizeSuggestedVisual(jsonData.suggestedVisual || jsonData.visual, lesson.subject);
         parsedResponse = {
           teacherMessage,
           suggestedVisual,
@@ -318,7 +334,7 @@ export async function continueTeachingTurn(
       parsedResponse.teacherMessage = 'That\'s an interesting thought! Let me ask you a clarifying question to better understand your perspective.';
     }
     parsedResponse.text = parsedResponse.teacherMessage;
-    parsedResponse.suggestedVisual = normalizeSuggestedVisual(parsedResponse.suggestedVisual);
+    parsedResponse.suggestedVisual = normalizeSuggestedVisual(parsedResponse.suggestedVisual, lesson.subject);
     parsedResponse.visual = parsedResponse.suggestedVisual;
 
     // Ensure nextAction is valid

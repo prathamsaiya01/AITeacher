@@ -4,8 +4,9 @@ import { useApp } from '@/context/AppContext';
 import { generateQuestion, evaluateAnswer } from '@/services/aiService';
 import { continueTeachingTurn } from '@/services/teacherService';
 import { retrieveRelevantContext } from '@/services/ragService';
-import { cancelSpeech, speak, startListening } from '@/services/voiceService';
-import { setAvatarTalking } from '@/services/avatarService';
+import { cancelSpeech, speak, startListening, stopListening } from '@/services/voiceService';
+import { avatarService, initializeAvatarSession, setAvatarTalking, stopAvatarSession, streamAvatarVideo } from '@/services/avatarService';
+import type { AvatarSession } from '@/services/avatarService';
 import type { SuggestedVisual } from '@/services/teacherService';
 import {
   Brain, Volume2, VolumeX, Mic, MicOff, Send, CheckCircle2, XCircle, Lightbulb, TrendingUp,
@@ -147,7 +148,9 @@ export default function ClassroomPage() {
   const [retrievedContext, setRetrievedContext] = useState<string[]>([]);
   const [greetingError, setGreetingError] = useState<string | null>(null);
   const [visualTab, setVisualTab] = useState<'visuals' | 'notes' | 'code'>('visuals');
+  const [avatarSession, setAvatarSession] = useState<AvatarSession>(() => avatarService.getSession());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const executeTurnRef = useRef<(message?: string, skipAdvance?: boolean) => Promise<void>>();
 
   const subject = lesson?.subject || 'General';
   const SubjectIcon = subjectIcons[subject];
@@ -176,7 +179,8 @@ export default function ClassroomPage() {
           0,
           [],
           undefined,
-          retrievedContext.length > 0 ? retrievedContext : undefined
+          retrievedContext.length > 0 ? retrievedContext : undefined,
+          student.language
         );
         setTeacherMessage(response.teacherMessage);
         setHistory([{ 
@@ -199,6 +203,15 @@ export default function ClassroomPage() {
 
     initializeLesson();
   }, [lesson, navigate, retrievedContext, student]);
+
+  useEffect(() => {
+    const unsubscribe = avatarService.subscribe(setAvatarSession);
+    void initializeAvatarSession('browser').then(() => streamAvatarVideo());
+    return () => {
+      unsubscribe();
+      stopAvatarSession();
+    };
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -246,19 +259,25 @@ export default function ClassroomPage() {
   }, [student?.language, voiceOn]);
 
   const handleMicInput = useCallback(async () => {
-    if (isListening) return;
+    if (isListening) {
+      stopListening();
+      setIsListening(false);
+      return;
+    }
     const language = student?.language === 'Hindi' || student?.language === 'Hinglish' ? 'hi-IN' : 'en-US';
     try {
       setIsListening(true);
       const transcript = await startListening({ language });
       setAnswerInput(transcript);
+      addStudentMessage(transcript);
+      await executeTurnRef.current?.(transcript, true);
     } catch (error) {
       console.warn('Voice input unavailable:', error);
       setGreetingError('Microphone input is unavailable. Please check browser permissions or type your answer.');
     } finally {
       setIsListening(false);
     }
-  }, [isListening, student?.language]);
+  }, [isListening, student?.language, addStudentMessage]);
 
   /**
    * Execute a teaching turn using AI Teaching Loop service
@@ -287,7 +306,8 @@ export default function ClassroomPage() {
           currentSegment?.conceptId ? lessonConcepts.findIndex((c) => c.id === currentSegment.conceptId) : 0,
           turnHistory,
           userMessage,
-          retrievedContext.length > 0 ? retrievedContext : undefined
+          retrievedContext.length > 0 ? retrievedContext : undefined,
+          student.language
         );
 
         setTeacherMessage(response.teacherMessage);
@@ -333,6 +353,10 @@ export default function ClassroomPage() {
     },
     [lesson, student, history, currentSegment, lessonConcepts, difficulty, retrievedContext, addTeacherMessage, navigate, speakTeacherMessage]
   );
+
+  useEffect(() => {
+    executeTurnRef.current = executeContinueLessonTurn;
+  }, [executeContinueLessonTurn]);
 
   const advanceSegment = useCallback(() => {
     if (!lesson) return;
@@ -560,11 +584,17 @@ export default function ClassroomPage() {
             <div className="glass-card p-6">
               <div className="flex items-start gap-4">
                 <div className="flex-shrink-0">
-                  <div className={`relative w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center ${isThinking || isSpeaking ? 'animate-pulse-glow' : ''}`}>
+                  <div
+                    role="img"
+                    aria-label={`Animated Prof. Nova avatar, ${avatarSession.status}`}
+                    className={`relative w-20 h-20 overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center ${isThinking || isSpeaking || avatarSession.isTalking ? 'animate-pulse-glow' : ''}`}
+                  >
+                    {/* Browser fallback avatar surface; replace with a HeyGen/custom stream when a streamUrl is supplied. */}
+                    <canvas aria-hidden="true" className="absolute inset-0 w-full h-full opacity-30 bg-gradient-to-br from-cyan-300/40 via-transparent to-violet-900/60" />
                     <Brain className="w-10 h-10 text-white" />
-                    {isSpeaking && <span className="absolute -right-1 -top-1 w-3 h-3 rounded-full bg-success-400 animate-ping" />}
+                    {(isSpeaking || avatarSession.isTalking) && <span className="absolute -right-1 -top-1 w-3 h-3 rounded-full bg-success-400 animate-ping" />}
                   </div>
-                  <div className="text-center text-xs text-slate-400 mt-2">Prof. Nova</div>
+                  <div className="text-center text-xs text-slate-400 mt-2">Prof. Nova · {avatarSession.status}</div>
                 </div>
                 <div className="flex-1 min-h-[80px]">
                   {isThinking ? (
