@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
-import { getProgressEntries } from '@/services/aiService';
 import {
   BarChart3, TrendingUp, Clock, Award, BookOpen, Target, Brain,
 } from 'lucide-react';
@@ -18,7 +17,7 @@ const subjectColors: Record<SubjectType, string> = {
 
 export default function ProgressPage() {
   const navigate = useNavigate();
-  const { student, progressEntries, refreshData } = useApp();
+  const { student, progressEntries, progress, refreshProgress } = useApp();
   const [entries, setEntries] = useState<ProgressEntry[]>(progressEntries);
   const [loading, setLoading] = useState(true);
 
@@ -27,16 +26,12 @@ export default function ProgressPage() {
       navigate('/setup');
       return;
     }
-    if (progressEntries.length === 0) {
-      getProgressEntries(student).then((e) => {
-        setEntries(e);
-        setLoading(false);
-      });
-    } else {
-      setEntries(progressEntries);
-      setLoading(false);
-    }
-  }, [student, progressEntries, navigate]);
+    refreshProgress().finally(() => setLoading(false));
+  }, [student, navigate, refreshProgress]);
+
+  useEffect(() => {
+    setEntries(progressEntries);
+  }, [progressEntries]);
 
   if (loading) {
     return (
@@ -46,9 +41,23 @@ export default function ProgressPage() {
     );
   }
 
-  const avgScore = Math.round(entries.reduce((s, e) => s + e.score, 0) / entries.length);
-  const totalMinutes = entries.reduce((s, e) => s + e.learningMinutes, 0);
-  const totalConcepts = entries[entries.length - 1]?.conceptsMastered || 0;
+  if (entries.length === 0) {
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="max-w-5xl mx-auto relative z-10">
+          <h1 className="font-display text-3xl font-bold text-white mb-1">Your Progress</h1>
+          <div className="glass-card p-8 mt-8 text-center">
+            <BookOpen className="w-10 h-10 text-cyan-300 mx-auto mb-4" />
+            <p className="text-slate-300">No learning activity recorded yet. Complete your first lesson to track progress!</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const avgScore = progress?.averageScore || 0;
+  const totalMinutes = progress?.totalLearningMinutes || 0;
+  const totalConcepts = progress?.masteredConcepts.length || entries[entries.length - 1]?.conceptsMastered || 0;
 
   // Subject distribution
   const subjectCounts: Record<string, number> = {};
@@ -56,12 +65,7 @@ export default function ProgressPage() {
     subjectCounts[e.subject] = (subjectCounts[e.subject] || 0) + 1;
   });
 
-  // Weak areas (mock)
-  const weakAreas = [
-    { name: 'Quadratic Equations', subject: 'Mathematics' as SubjectType, score: 45 },
-    { name: 'Acceleration', subject: 'Physics' as SubjectType, score: 52 },
-    { name: 'DNA & Genetics', subject: 'Biology' as SubjectType, score: 58 },
-  ];
+  const weakAreas = progress?.weakConcepts || [];
 
   return (
     <div className="min-h-screen px-4 py-8">
@@ -140,18 +144,11 @@ export default function ProgressPage() {
             <h3 className="font-semibold text-white">Weak Areas</h3>
           </div>
           <div className="space-y-3">
-            {weakAreas.map((area) => (
-              <div key={area.name} className="flex items-center gap-4">
-                <span className="text-sm text-slate-300 w-48 flex-shrink-0">{area.name}</span>
-                <div className="flex-1 h-3 rounded-full bg-ink-700/40 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-error-500 to-warning-500 transition-all duration-700"
-                    style={{ width: `${area.score}%` }}
-                  />
-                </div>
-                <span className="text-sm text-error-400 w-12 text-right">{area.score}%</span>
+            {weakAreas.length > 0 ? weakAreas.map((area) => (
+              <div key={area} className="flex items-center gap-4">
+                <span className="text-sm text-slate-300">{area}</span>
               </div>
-            ))}
+            )) : <p className="text-sm text-slate-500">No weak areas recorded yet.</p>}
           </div>
         </div>
       </div>

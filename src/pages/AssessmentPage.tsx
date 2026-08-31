@@ -2,12 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { generateAssessment, gradeAssessment } from '@/services/aiService';
+import { saveAssessmentResult, saveCompletedLesson } from '@/services/studentService';
 import { CheckCircle2, XCircle, Clock, ArrowRight, Loader2, HelpCircle, ChevronRight } from 'lucide-react';
 import type { AssessmentQuestion } from '@/models';
 
 export default function AssessmentPage() {
   const navigate = useNavigate();
-  const { lesson, setAssessmentResult } = useApp();
+  const { lesson, student, setAssessmentResult, refreshProgress } = useApp();
   const [questions, setQuestions] = useState<AssessmentQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -15,6 +16,7 @@ export default function AssessmentPage() {
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [textAnswer, setTextAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!lesson) {
@@ -23,10 +25,17 @@ export default function AssessmentPage() {
     }
     let cancelled = false;
     const run = async () => {
-      const qs = await generateAssessment(lesson!);
-      if (!cancelled) {
-        setQuestions(qs);
-        setLoading(false);
+      try {
+        const qs = await generateAssessment(lesson);
+        if (!cancelled) {
+          setQuestions(qs);
+          setError(qs.length > 0 ? null : 'No assessment questions were generated. Please try again.');
+        }
+      } catch (error) {
+        console.error('Failed to generate assessment:', error);
+        if (!cancelled) setError('Unable to load the assessment. Please return to Learn and try again.');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
     run();
@@ -51,20 +60,39 @@ export default function AssessmentPage() {
     } else {
       // Submit
       setSubmitting(true);
-      const finalResponses = { ...responses, [q.id]: answer };
-      const result = await gradeAssessment('assessment_1', lesson!.id, questions, finalResponses);
-      setAssessmentResult(result);
-      setSubmitting(false);
-      navigate('/report');
+      try {
+        if (!lesson || !student) throw new Error('No active lesson or student found');
+        const finalResponses = { ...responses, [q.id]: answer };
+        const result = await gradeAssessment('assessment_1', lesson.id, questions, finalResponses);
+        await saveCompletedLesson(student.id, lesson);
+        await saveAssessmentResult(student.id, result);
+        setAssessmentResult(result);
+        await refreshProgress();
+        navigate('/report');
+      } catch (error) {
+        console.error('Failed to grade assessment:', error);
+        setError('Unable to grade your assessment right now. Please try submitting again.');
+      } finally {
+        setSubmitting(false);
+      }
     }
   };
 
-  if (loading || !lesson) {
+  if (loading || !lesson || error) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 rounded-full border-4 border-violet-500/30 border-t-violet-400 animate-spin" />
-          <p className="text-slate-400">Preparing your assessment...</p>
+          {error ? (
+            <>
+              <p role="alert" className="text-center text-error-300">{error}</p>
+              <button onClick={() => navigate('/learn')} className="btn-secondary">Back to Learn</button>
+            </>
+          ) : (
+            <>
+              <div className="w-12 h-12 rounded-full border-4 border-violet-500/30 border-t-violet-400 animate-spin" />
+              <p className="text-slate-400">Preparing your assessment...</p>
+            </>
+          )}
         </div>
       </div>
     );

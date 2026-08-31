@@ -7,11 +7,45 @@ export interface DocumentChunk {
 }
 
 export interface ProcessedDocument {
+  id: string;
   fileName: string;
   fileType: string;
   sizeBytes: number;
   extractedText: string;
   chunks: DocumentChunk[];
+}
+
+const textFileExtensions = new Set(['txt', 'md', 'json', 'csv']);
+
+function getFileExtension(file: File): string {
+  return file.name.split('.').pop()?.toLowerCase() || '';
+}
+
+function sanitizeText(text: string): string {
+  return text.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function metadataFallback(file: File): string {
+  const fileType = file.type || getFileExtension(file) || 'unknown';
+  return `Document ${file.name} (${fileType}, ${file.size} bytes) contains no readable text.`;
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error || new Error('Unable to read file as an ArrayBuffer'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Unable to read file as text'));
+    reader.readAsText(file);
+  });
 }
 
 /**
@@ -52,42 +86,34 @@ export function chunkText(text: string, chunkSize = 500, overlap = 100): string[
 export async function extractTextFromFile(file: File): Promise<string> {
   try {
     const fileType = file.type.toLowerCase();
+    const extension = getFileExtension(file);
+    let rawText = '';
 
     // Handle PDF files
-    if (fileType === 'application/pdf' || file.name.endsWith('.pdf')) {
+    if (fileType === 'application/pdf' || extension === 'pdf') {
       try {
         // Dynamic import to handle optional dependency
         const pdfModule = (await import('pdf-parse')) as any;
         const pdfParse = pdfModule.default || pdfModule;
-        const arrayBuffer = await file.arrayBuffer();
+        const arrayBuffer = await readFileAsArrayBuffer(file);
         const pdfData = await pdfParse(arrayBuffer);
-        return pdfData.text || '';
+        rawText = pdfData.text || '';
       } catch (pdfError) {
         console.warn('PDF parsing failed, attempting fallback:', pdfError);
-        // Fallback: return empty string if pdf-parse fails
-        return '';
+        rawText = '';
       }
+    } else if (textFileExtensions.has(extension) || fileType.startsWith('text/')) {
+      rawText = await file.text();
+    } else {
+      // Binary and office files are read through FileReader for browser compatibility.
+      rawText = await readFileAsText(file);
     }
 
-    // Handle plain text files
-    if (
-      fileType === 'text/plain' ||
-      file.name.endsWith('.txt') ||
-      file.name.endsWith('.md')
-    ) {
-      return await file.text();
-    }
-
-    // For other text-based formats, try reading as text
-    if (fileType.startsWith('text/')) {
-      return await file.text();
-    }
-
-    // Default: try to read as text
-    return await file.text();
+    const sanitizedText = sanitizeText(rawText);
+    return sanitizedText.length >= 20 ? sanitizedText : metadataFallback(file);
   } catch (error) {
     console.error('Error extracting text from file:', error);
-    throw new Error(`Failed to extract text from ${file.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    return metadataFallback(file);
   }
 }
 
@@ -101,12 +127,8 @@ export async function processDocument(file: File): Promise<ProcessedDocument> {
     // Extract text from file
     const extractedText = await extractTextFromFile(file);
 
-    if (!extractedText || extractedText.trim().length === 0) {
-      throw new Error('No text could be extracted from the file');
-    }
-
     // Chunk the text
-    const textChunks = chunkText(extractedText);
+    const textChunks = chunkText(extractedText, 500, 100);
 
     if (textChunks.length === 0) {
       throw new Error('Text chunking produced no results');
@@ -126,6 +148,7 @@ export async function processDocument(file: File): Promise<ProcessedDocument> {
     const fileType = file.name.split('.').pop()?.toLowerCase() || 'unknown';
 
     return {
+      id: `document_${Date.now()}`,
       fileName: file.name,
       fileType,
       sizeBytes: file.size,

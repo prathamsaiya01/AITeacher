@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import type {
   Student,
   Lesson,
@@ -10,6 +10,7 @@ import type {
 } from '@/models';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+if (!apiKey) console.warn("VITE_GEMINI_API_KEY is missing from environment variables.");
 const ai = new GoogleGenAI({ apiKey });
 
 /**
@@ -21,60 +22,93 @@ export interface SuggestedVisual {
   description?: string;
 }
 
-/**
- * Structured response from the teaching turn
- */
-export interface TeachingResponse {
+export interface TeachingTurnResponse {
   teacherMessage: string;
   suggestedVisual?: SuggestedVisual;
+}
+
+/** Structured response used by the classroom teaching loop. */
+export interface TeachingResponse extends TeachingTurnResponse {
+  text: string;
+  visual?: SuggestedVisual;
   nextAction: 'explain' | 'ask_question' | 'evaluate' | 'next_concept';
   confidence?: number; // 0-1, how confident the AI is in student's understanding
   misconceptionDetected?: string;
 }
 
-/**
- * Gemini schema for structured teaching response
- */
-const teachingResponseSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    teacherMessage: {
-      type: Type.STRING,
-      description: 'The teacher\'s response using Socratic methodology',
-    },
-    suggestedVisual: {
-      type: Type.OBJECT,
-      properties: {
-        type: {
-          type: Type.STRING,
-          enum: ['equation', 'diagram', 'timeline', 'code', 'flowchart'],
-        },
-        content: {
-          type: Type.STRING,
-          description: 'Content or LaTeX/code for the visual',
-        },
-        description: {
-          type: Type.STRING,
-          description: 'Brief description of the visual',
-        },
-      },
-    },
-    nextAction: {
-      type: Type.STRING,
-      enum: ['explain', 'ask_question', 'evaluate', 'next_concept'],
-      description: 'Next teaching action to take',
-    },
-    confidence: {
-      type: Type.NUMBER,
-      description: 'Confidence score (0-1) in student\'s understanding',
-    },
-    misconceptionDetected: {
-      type: Type.STRING,
-      description: 'If present, description of detected misconception',
-    },
-  },
-  required: ['teacherMessage', 'nextAction'],
-};
+function createFallbackResponse(message: string): TeachingResponse {
+  const visual: SuggestedVisual = {
+    type: 'diagram',
+    content: 'Start with what you already know, then connect it to the current concept.',
+    description: 'A simple learning path for the current concept',
+  };
+
+  return {
+    teacherMessage: message,
+    suggestedVisual: visual,
+    text: message,
+    visual,
+    nextAction: 'ask_question',
+    confidence: 0,
+  };
+}
+
+function normalizeSuggestedVisual(value: unknown): SuggestedVisual {
+  if (value && typeof value === 'object') {
+    const visual = value as Partial<SuggestedVisual>;
+    const validTypes: SuggestedVisual['type'][] = ['equation', 'diagram', 'timeline', 'code', 'flowchart'];
+    if (validTypes.includes(visual.type as SuggestedVisual['type']) && typeof visual.content === 'string') {
+      return {
+        type: visual.type as SuggestedVisual['type'],
+        content: visual.content,
+        description: visual.description,
+      };
+    }
+  }
+
+  return {
+    type: 'diagram',
+    content: 'Connect what you already know to the current concept step by step.',
+    description: 'A simple visual guide for the current concept',
+  };
+}
+
+function resolveLanguage(student: Student, preferredLanguage?: Language, userMessage?: string): Language {
+  if (preferredLanguage) return preferredLanguage;
+  const message = userMessage?.toLowerCase() || '';
+  if (/\b(hinglish|roman hindi)\b/.test(message)) return 'Hinglish';
+  if (/\b(hindi|देवनागरी)\b/.test(message)) return 'Hindi';
+  if (/\b(english|अंग्रेजी)\b/.test(message)) return 'English';
+  return student.language;
+}
+
+function languageInstruction(language: Language): string {
+  switch (language) {
+    case 'Hindi':
+      return 'Respond in clear, natural Devanagari Hindi. Keep unavoidable technical terms, formulas, code, and standard abbreviations in their original readable form.';
+    case 'Hinglish':
+      return 'Respond in a natural Romanized Hindi and English blend, for example: "Dekho, iska simple matlab ye hai ki..." Keep technical terms, formulas, and code readable.';
+    default:
+      return 'Respond in formal but accessible English using a clear Socratic teaching style.';
+  }
+}
+
+function subjectVisualInstruction(subject: SubjectType): string {
+  switch (subject) {
+    case 'Mathematics':
+      return 'Prefer equation visuals with readable LaTeX/plain-text formulas and step-by-step derivations.';
+    case 'Physics':
+      return 'Prefer structural formulas, force/motion diagrams, and clearly ordered motion or process flows.';
+    case 'Biology':
+      return 'Prefer labeled component trees, relationship diagrams, and ordered biological process flows.';
+    case 'History':
+      return 'Prefer chronological timelines with dates, event sequences, and concise cause/effect labels.';
+    case 'Programming':
+      return 'Prefer clean formatted code with language labels and a simulated output terminal when useful.';
+    default:
+      return 'Prefer a clear concept diagram or flowchart that shows relationships between ideas.';
+  }
+}
 
 /**
  * Build system prompt for Socratic teaching methodology
@@ -83,7 +117,8 @@ function buildSystemPrompt(
   student: Student,
   lesson: Lesson,
   currentConcept: Concept,
-  retrievedContext?: string[]
+  retrievedContext?: string[],
+  preferredLanguage: Language = student.language
 ): string {
   const languageMap: Record<Language, string> = {
     English: 'English',
@@ -113,7 +148,7 @@ function buildSystemPrompt(
 ## Student Profile
 - Name: ${student.name}
 - Learning Level: ${student.level}
-- Preferred Language: ${languageMap[student.language]}
+- Preferred Language: ${languageMap[preferredLanguage]}
 - Teaching Style Preference: ${teachingStyleMap[student.teachingStyle]}
 - Learning Goal: ${student.goal}
 
@@ -121,6 +156,7 @@ function buildSystemPrompt(
 - Lesson: ${lesson.title}
 - Topic: ${lesson.topic}
 - Current Concept: ${currentConcept.name}
+- Subject visual guidance: ${subjectVisualInstruction(lesson.subject)}
 - Concept Description: ${currentConcept.description}
 - Difficulty Level: ${currentConcept.difficulty}/5
 - Estimated Time: ${currentConcept.estimatedMinutes} minutes
@@ -135,7 +171,8 @@ You MUST follow this 5-stage process:
 
 ## Response Guidelines
 - NEVER act like a generic chatbot. Every response must be pedagogically intentional.
-- Use language that is ${languageMap[student.language]}.
+- ${languageInstruction(preferredLanguage)}
+- Continue using the full lesson context, concept progression, and previous conversation even if the student changes language mid-conversation.
 - Tailor complexity to ${student.level} level.
 - When suggesting visuals, choose types appropriate to the concept.
 - Always encourage critical thinking; avoid just giving answers.
@@ -149,6 +186,7 @@ When appropriate, suggest visuals using these types:
 - 'timeline': Historical sequences or process flows
 - 'code': Programming examples or pseudocode
 - 'flowchart': Decision trees or process flows
+- Keep equations, code, numbers, and diagram structure language-neutral. Use short readable labels; use English technical terms in parentheses when a translated label could be unclear.
 
 ## Misconception Handling
 If you detect a misconception:
@@ -192,9 +230,10 @@ export async function continueTeachingTurn(
   student: Student,
   lesson: Lesson,
   currentConceptIndex: number,
-  chatHistory: ChatMessage[],
+  chatHistory: ChatMessage[] = [],
   userMessage?: string,
-  retrievedContext?: string[]
+  retrievedContext?: string[],
+  preferredLanguage?: Language
 ): Promise<TeachingResponse> {
   try {
     // Validate inputs
@@ -211,8 +250,10 @@ export async function continueTeachingTurn(
       throw new Error('VITE_GEMINI_API_KEY is not configured');
     }
 
+    const activeLanguage = resolveLanguage(student, preferredLanguage, userMessage);
+
     // Build the system prompt with pedagogical context
-    const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext);
+    const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage);
 
     // Build conversation history for context
     const conversationHistory = chatHistory
@@ -223,58 +264,62 @@ export async function continueTeachingTurn(
       }));
 
     // Add current user message if provided
-    if (userMessage) {
-      conversationHistory.push({
-        role: 'user' as const,
-        content: userMessage,
-      });
-    } else {
-      // If no user message, generate an initial greeting/prompt for the concept
-      conversationHistory.push({
-        role: 'user' as const,
-        content: `I'm ready to learn about "${currentConcept.name}". Please start by understanding what I already know about this topic.`,
-      });
-    }
+    const currentUserInput = userMessage?.trim() || "Hello Prof. Nova, let's start the lesson.";
 
     // Call Gemini API with structured output
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      systemInstruction: systemPrompt,
-      contents: conversationHistory,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: teachingResponseSchema,
-        temperature: 0.7, // Balanced for pedagogical quality
-      },
-    });
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `${systemPrompt}\n\nActive response language: ${activeLanguage}\n\nConversation History:\n${conversationHistory.map((message) => `${message.role}: ${message.content}`).join('\n')}\n\nUser Input: ${currentUserInput}`,
+        config: {
+          temperature: 0.5,
+        },
+      });
+    } catch (err) {
+      console.error("Gemini API Error Detail:", err);
+      return createFallbackResponse(
+        'I am having trouble connecting to Gemini. Please check VITE_GEMINI_API_KEY and your network connection, then try again.'
+      );
+    }
 
     // Parse the response
-    const responseText = response.text || '{}';
+    const responseText = response.text?.trim();
     let parsedResponse: TeachingResponse;
 
-    try {
-      const jsonData = JSON.parse(responseText);
-      parsedResponse = {
-        teacherMessage: jsonData.teacherMessage || 'I apologize, but I encountered an error. Please try again.',
-        suggestedVisual: jsonData.suggestedVisual || undefined,
-        nextAction: jsonData.nextAction || 'explain',
-        confidence: jsonData.confidence !== undefined ? jsonData.confidence : 0.5,
-        misconceptionDetected: jsonData.misconceptionDetected || undefined,
-      };
-    } catch (parseError) {
-      console.error('Failed to parse Gemini response:', parseError, 'Raw response:', responseText);
-      // Fallback to a safe response
-      parsedResponse = {
-        teacherMessage: responseText || 'Let me rephrase that. Could you tell me what you understand about this concept so far?',
-        nextAction: 'ask_question',
-        confidence: 0.3,
-      };
+    if (responseText) {
+      try {
+        const jsonData = JSON.parse(responseText) as Partial<TeachingResponse>;
+        const teacherMessage = jsonData.teacherMessage || jsonData.text || '';
+        const suggestedVisual = normalizeSuggestedVisual(jsonData.suggestedVisual || jsonData.visual);
+        parsedResponse = {
+          teacherMessage,
+          suggestedVisual,
+          text: teacherMessage,
+          visual: suggestedVisual,
+          nextAction: jsonData.nextAction || 'explain',
+          confidence: jsonData.confidence !== undefined ? jsonData.confidence : 0.5,
+          misconceptionDetected: jsonData.misconceptionDetected || undefined,
+        };
+      } catch (parseError) {
+        console.error('Failed to parse Gemini response:', parseError, 'Raw response:', responseText);
+        parsedResponse = createFallbackResponse(
+          'I received an unclear response. Could you tell me what you understand about this concept so far?'
+        );
+      }
+    } else {
+      parsedResponse = createFallbackResponse(
+        'I did not receive a response. Could you tell me what you already know about this concept?'
+      );
     }
 
     // Validate teacherMessage
     if (!parsedResponse.teacherMessage || parsedResponse.teacherMessage.trim().length === 0) {
       parsedResponse.teacherMessage = 'That\'s an interesting thought! Let me ask you a clarifying question to better understand your perspective.';
     }
+    parsedResponse.text = parsedResponse.teacherMessage;
+    parsedResponse.suggestedVisual = normalizeSuggestedVisual(parsedResponse.suggestedVisual);
+    parsedResponse.visual = parsedResponse.suggestedVisual;
 
     // Ensure nextAction is valid
     if (!['explain', 'ask_question', 'evaluate', 'next_concept'].includes(parsedResponse.nextAction)) {
@@ -282,15 +327,11 @@ export async function continueTeachingTurn(
     }
 
     return parsedResponse;
-  } catch (error) {
-    console.error('Error in continueTeachingTurn:', error);
-
-    // Fallback response on error
-    return {
-      teacherMessage: 'I encountered a technical issue. Could you please repeat what you said so I can help you better?',
-      nextAction: 'ask_question',
-      confidence: 0,
-    };
+  } catch (err) {
+    console.error("Gemini API Error Detail:", err);
+    return createFallbackResponse(
+      'I encountered a Gemini connection issue. Please check VITE_GEMINI_API_KEY and your network connection, then try again.'
+    );
   }
 }
 

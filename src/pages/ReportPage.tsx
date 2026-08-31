@@ -13,6 +13,7 @@ export default function ReportPage() {
   const { lesson, assessmentResult, setLearningReport, refreshData } = useApp();
   const [report, setReport] = useState<LearningReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!lesson || !assessmentResult) {
@@ -21,12 +22,18 @@ export default function ReportPage() {
     }
     let cancelled = false;
     const run = async () => {
-      const r = await generateLearningReport(lesson!, assessmentResult!);
-      if (!cancelled) {
-        setReport(r);
-        setLearningReport(r);
-        setLoading(false);
-        refreshData();
+      try {
+        const r = await generateLearningReport(lesson, assessmentResult);
+        if (!cancelled) {
+          setReport(r);
+          setLearningReport(r);
+          refreshData();
+        }
+      } catch (error) {
+        console.error('Failed to generate learning report:', error);
+        if (!cancelled) setError('Unable to generate your learning report. Please try again.');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
     run();
@@ -37,8 +44,17 @@ export default function ReportPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 rounded-full border-4 border-violet-500/30 border-t-violet-400 animate-spin" />
-          <p className="text-slate-400">Generating your learning report...</p>
+          {error ? (
+            <>
+              <p role="alert" className="text-center text-error-300">{error}</p>
+              <button onClick={() => navigate('/assessment')} className="btn-secondary">Back to Assessment</button>
+            </>
+          ) : (
+            <>
+              <div className="w-12 h-12 rounded-full border-4 border-violet-500/30 border-t-violet-400 animate-spin" />
+              <p className="text-slate-400">Generating your learning report...</p>
+            </>
+          )}
         </div>
       </div>
     );

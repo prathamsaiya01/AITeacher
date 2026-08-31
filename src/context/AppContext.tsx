@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import type { Student, Lesson, UploadedDocument, LearningReport, AssessmentResult, ProgressEntry, DashboardStats, LearningPath } from '@/models';
-import { getDashboardStats, getProgressEntries, generateLearningPath, generateLesson as generateGeminiLesson, type GenerateLessonParams } from '@/services/aiService';
+import type { StudentProgress } from '@/services/studentService';
+import { generateLearningPath, generateLesson as generateGeminiLesson, type GenerateLessonParams } from '@/services/aiService';
+import { getStudentProgress } from '@/services/studentService';
 
 interface AppContextValue {
   student: Student | null;
@@ -17,11 +19,13 @@ interface AppContextValue {
   setLearningReport: (r: LearningReport | null) => void;
   dashboardStats: DashboardStats | null;
   progressEntries: ProgressEntry[];
+  progress: StudentProgress | null;
   learningPath: LearningPath | null;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
   generateLesson: (params?: Partial<GenerateLessonParams>) => Promise<Lesson | null>;
   refreshData: () => Promise<void>;
+  refreshProgress: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -35,30 +39,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [learningReport, setLearningReport] = useState<LearningReport | null>(null);
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [progressEntries, setProgressEntries] = useState<ProgressEntry[]>([]);
+  const [progress, setProgress] = useState<StudentProgress | null>(null);
   const [learningPath, setLearningPath] = useState<LearningPath | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
+  const refreshProgress = useCallback(async () => {
+    if (!student) return;
+    const progress = await getStudentProgress(student.id);
+    setProgress(progress);
+    setProgressEntries(progress.entries);
+    setDashboardStats({
+      lessonsCompleted: progress.lessonsCompleted,
+      totalLearningMinutes: progress.totalLearningMinutes,
+      averageScore: progress.averageScore,
+      streak: progress.streak,
+      strongConcepts: progress.strongConcepts,
+      weakConcepts: progress.weakConcepts,
+      recommendedLessons: [],
+      continueLearning: null,
+    });
+  }, [student]);
+
   const refreshData = useCallback(async () => {
     if (!student) return;
-    const [stats, entries, path] = await Promise.all([
-      getDashboardStats(student),
-      getProgressEntries(student),
-      generateLearningPath(student),
+    await Promise.all([
+      refreshProgress(),
+      generateLearningPath(student).then(setLearningPath),
     ]);
-    setDashboardStats(stats);
-    setProgressEntries(entries);
-    setLearningPath(path);
-  }, [student]);
+  }, [refreshProgress, student]);
 
   const handleGenerateLesson = useCallback(
     async (params?: Partial<GenerateLessonParams>): Promise<Lesson | null> => {
       const activeStudent = student || {
         id: 'default_student',
         name: 'Student',
-        gradeLevel: params?.studentLevel || 'High School',
-        preferredLanguage: params?.language || 'English',
-        learningStyle: params?.teachingStyle || 'Visual',
-        interests: [],
+        level: (params?.studentLevel || 'Intermediate') as Student['level'],
+        language: (params?.language || 'English') as Student['language'],
+        goal: params?.learningGoal || 'Master core concepts',
+        teachingStyle: (params?.teachingStyle || 'Visual') as Student['teachingStyle'],
+        depth: 'Standard',
+        availableTime: 30,
         createdAt: new Date().toISOString(),
       };
 
@@ -100,11 +120,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLearningReport,
         dashboardStats,
         progressEntries,
+        progress,
         learningPath,
         isLoading,
         setIsLoading,
         generateLesson: handleGenerateLesson,
         refreshData,
+        refreshProgress,
       }}
     >
       {children}

@@ -123,7 +123,7 @@ export interface AssessmentQuestion {
 export interface AssessmentResult {
   assessmentId: string;
   lessonId: string;
-  answers: { questionId: string; response: string; score: number; isCorrect: boolean }[];
+  answers: { questionId: string; response: string; score: number; isCorrect: boolean; conceptId?: string }[];
   totalScore: number;
   maxScore: number;
   percentage: number;

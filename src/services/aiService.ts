@@ -22,8 +22,10 @@ import type {
 } from '@/models';
 import { processDocument } from './documentService';
 import { storeDocumentInSupabase } from './ragService';
+import { getStudentMemoryContext } from './studentService';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+if (!apiKey) console.warn('VITE_GEMINI_API_KEY is missing from environment variables.');
 const ai = new GoogleGenAI({ apiKey });
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -120,6 +122,8 @@ export async function generateLesson(
   const documentContext = document?.extractedText
     ? `\nBase the lesson on the following uploaded document content:\n"""\n${document.extractedText}\n"""`
     : '';
+  const memory = await getStudentMemoryContext(student.id);
+  const memoryContext = `\nStudent learning memory:\n- Mastered concepts: ${memory.masteredConcepts.join(', ') || 'None recorded'}\n- Concepts needing reinforcement: ${memory.weakConcepts.join(', ') || 'None recorded'}`;
 
   const prompt = `Act as an expert Socratic AI Teacher. Generate a complete, structured interactive lesson plan based on these parameters:
 - Topic: ${topic}
@@ -129,7 +133,7 @@ export async function generateLesson(
 - Learning Goal: ${learningGoal}
 - Teaching Style: ${teachingStyle}
 - Available Time: ${availableTime}
-- Desired Depth: ${desiredDepth}${documentContext}
+- Desired Depth: ${desiredDepth}${documentContext}${memoryContext}
 
 Provide 3 to 5 core concepts. For each concept, include a teaching explanation, an illustrative example, visual content suggestions, and a multiple-choice check question with 4 options.`;
 
@@ -322,45 +326,55 @@ export async function generateQuestion(conceptId: string, subject: SubjectType, 
   return { ...chosen, id: uid('q'), conceptId };
 }
 
+async function generateGeminiJson<T>(prompt: string, responseSchema: Schema): Promise<T> {
+  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY is not configured');
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { responseMimeType: 'application/json', responseSchema, temperature: 0.3 },
+    });
+  } catch (primaryError) {
+    console.error('Gemini API Error Detail:', primaryError);
+    response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash',
+      contents: prompt,
+      config: { responseMimeType: 'application/json', responseSchema, temperature: 0.3 },
+    });
+  }
+  const text = response.text?.trim();
+  if (!text) throw new Error('Gemini returned an empty response');
+  return JSON.parse(text) as T;
+}
+
 // ---------- Answer evaluation ----------
 export async function evaluateAnswer(question: Question, answer: Answer): Promise<Evaluation> {
-  await delay(500);
-  const userAnswer = answer.response.trim().toLowerCase();
-  const correct = question.correctAnswer.trim().toLowerCase();
-  let isCorrect = false;
-  if (question.options) {
-    const opt = question.options.find((o) => o.label.toLowerCase() === userAnswer || o.id === userAnswer);
-    isCorrect = !!opt?.isCorrect;
-  } else {
-    isCorrect = userAnswer.includes(correct.slice(0, 15)) || correct.includes(userAnswer.slice(0, 15)) || userAnswer === correct;
-  }
+  const fallbackCorrect = answer.response.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase();
+  const fallback: Evaluation = fallbackCorrect
+    ? { isCorrect: true, feedback: 'Good work. Let\'s deepen your understanding with a harder question.', newDifficulty: Math.min(5, question.difficulty + 1), understandingDelta: 8, shouldReExplain: false }
+    : { isCorrect: false, feedback: 'Let\'s revisit the idea from another angle.', newDifficulty: Math.max(1, question.difficulty - 1), understandingDelta: -5, shouldReExplain: true, misconception: { id: uid('mis'), conceptId: question.conceptId, conceptName: question.conceptId, description: `The response "${answer.response}" does not match the expected concept.`, alternativeExplanation: question.explanation, analogy: `Think of the concept as a connected set of ideas: ${question.explanation}`, simplerExample: question.hint || `What is the simplest example of ${question.conceptId}?` } };
 
-  if (isCorrect) {
-    return {
-      isCorrect: true,
-      feedback: 'Great! You understand this. Let\'s go deeper.',
-      newDifficulty: Math.min(5, question.difficulty + 1),
-      understandingDelta: 8,
-      shouldReExplain: false,
-    };
+  try {
+    const parsed = await generateGeminiJson<Partial<Evaluation>>(`Evaluate this student's answer as a Socratic teacher.
+Question: ${question.prompt}
+Expected answer: ${question.correctAnswer}
+Explanation: ${question.explanation}
+Student answer: ${answer.response}
+Return JSON with isCorrect, feedback, newDifficulty (1-5), understandingDelta (-20 to 20), shouldReExplain, and misconception when incorrect.`, {
+      type: Type.OBJECT,
+      properties: {
+        isCorrect: { type: Type.BOOLEAN }, feedback: { type: Type.STRING }, newDifficulty: { type: Type.NUMBER }, understandingDelta: { type: Type.NUMBER }, shouldReExplain: { type: Type.BOOLEAN },
+        misconception: { type: Type.OBJECT, properties: { description: { type: Type.STRING }, alternativeExplanation: { type: Type.STRING }, analogy: { type: Type.STRING }, simplerExample: { type: Type.STRING } } },
+      }, required: ['isCorrect', 'feedback', 'newDifficulty', 'understandingDelta', 'shouldReExplain'],
+    });
+    const isCorrect = Boolean(parsed.isCorrect);
+    const misconception = !isCorrect ? { id: uid('mis'), conceptId: question.conceptId, conceptName: question.conceptId, description: parsed.misconception?.description || fallback.misconception?.description || 'A misconception was detected.', alternativeExplanation: parsed.misconception?.alternativeExplanation || fallback.misconception?.alternativeExplanation || question.explanation, analogy: parsed.misconception?.analogy || fallback.misconception?.analogy || question.explanation, simplerExample: parsed.misconception?.simplerExample || fallback.misconception?.simplerExample || question.hint || question.explanation } : undefined;
+    return { isCorrect, feedback: parsed.feedback || fallback.feedback, newDifficulty: isCorrect ? Math.min(5, question.difficulty + 1) : Math.max(1, question.difficulty - 1), understandingDelta: Number(parsed.understandingDelta) || 0, shouldReExplain: !isCorrect, ...(misconception ? { misconception } : {}) };
+  } catch (error) {
+    console.error('Gemini evaluation error:', error);
+    return fallback;
   }
-  const misconception: Misconception = {
-    id: uid('mis'),
-    conceptId: question.conceptId,
-    conceptName: question.conceptId,
-    description: `The answer "${answer.response}" suggests a gap in understanding.`,
-    alternativeExplanation: question.explanation,
-    analogy: `Think of it like this: ${question.explanation}`,
-    simplerExample: `Simpler example: ${question.hint || question.explanation}`,
-  };
-  return {
-    isCorrect: false,
-    feedback: 'I noticed a misconception. Let\'s look at it differently.',
-    misconception,
-    newDifficulty: Math.max(1, question.difficulty - 1),
-    understandingDelta: -5,
-    shouldReExplain: true,
-  };
 }
 
 export async function detectMisconception(question: Question, answer: Answer): Promise<Misconception | null> {
@@ -371,20 +385,21 @@ export async function detectMisconception(question: Question, answer: Answer): P
 
 // ---------- Assessment ----------
 export async function generateAssessment(lesson: Lesson): Promise<AssessmentQuestion[]> {
-  await delay(1000);
-  const subject = lesson.subject;
-  const templates = questionTemplates[subject] || questionTemplates.General;
-  const questions: AssessmentQuestion[] = templates.slice(0, 5).map((q, i) => ({
-    id: uid('a'),
-    type: q.type,
-    prompt: q.prompt,
-    options: q.options,
-    correctAnswer: q.correctAnswer,
-    explanation: q.explanation,
-    conceptId: q.conceptId,
-    maxScore: 20,
-  }));
-  return questions;
+  const templates = questionTemplates[lesson.subject] || questionTemplates.General;
+  const fallback = Array.from({ length: 5 }, (_, index) => {
+    const q = templates[index % templates.length];
+    return { ...q, id: uid('a'), maxScore: 20 };
+  });
+  try {
+    const parsed = await generateGeminiJson<{ questions?: Partial<AssessmentQuestion>[] }>(`Create exactly 5 personalized assessment questions for this lesson. Mix MCQ, Short Answer, and Application Based questions, covering different concepts. Lesson: ${lesson.title}; Topic: ${lesson.topic}; Subject: ${lesson.subject}; Concepts: ${lesson.concepts.map((c) => `${c.id}: ${c.name} - ${c.description}`).join('; ')}`, {
+      type: Type.OBJECT, properties: { questions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { type: { type: Type.STRING, enum: ['MCQ', 'Conceptual', 'Short Answer', 'Problem Solving', 'Application Based'] }, prompt: { type: Type.STRING }, options: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { id: { type: Type.STRING }, label: { type: Type.STRING }, isCorrect: { type: Type.BOOLEAN } }, required: ['id', 'label', 'isCorrect'] } }, correctAnswer: { type: Type.STRING }, explanation: { type: Type.STRING }, conceptId: { type: Type.STRING }, maxScore: { type: Type.NUMBER } }, required: ['type', 'prompt', 'correctAnswer', 'explanation', 'conceptId'] } } }, required: ['questions']
+    });
+    if (!parsed.questions || parsed.questions.length < 5) return fallback;
+    return parsed.questions.slice(0, 5).map((q) => ({ id: uid('a'), type: q.type || 'Short Answer', prompt: q.prompt || 'Explain this concept.', options: q.options, correctAnswer: q.correctAnswer || '', explanation: q.explanation || '', conceptId: lesson.concepts.some((c) => c.id === q.conceptId) ? q.conceptId! : lesson.concepts[0]?.id || 'unknown', maxScore: Number(q.maxScore) || 20 }));
+  } catch (error) {
+    console.error('Gemini assessment generation error:', error);
+    return fallback;
+  }
 }
 
 export async function gradeAssessment(
@@ -407,7 +422,33 @@ export async function gradeAssessment(
 
 // ---------- Learning report ----------
 export async function generateLearningReport(lesson: Lesson, result: AssessmentResult): Promise<LearningReport> {
-  await delay(900);
+  const fallback = buildFallbackLearningReport(lesson, result);
+  try {
+    const parsed = await generateGeminiJson<Partial<LearningReport>>(`Analyze this learner assessment and produce a concise personalized report. Lesson concepts: ${lesson.concepts.map((c) => `${c.id}: ${c.name}`).join(', ')}. Assessment result: ${JSON.stringify(result)}. Include score, conceptsUnderstood, strongAreas, weakAreas, misconceptions with descriptions and alternativeExplanation, analogy, simplerExample, recommendedRevision, suggestedNextTopic, and summary.`, {
+      type: Type.OBJECT, properties: { score: { type: Type.NUMBER }, conceptsUnderstood: { type: Type.ARRAY, items: { type: Type.STRING } }, strongAreas: { type: Type.ARRAY, items: { type: Type.STRING } }, weakAreas: { type: Type.ARRAY, items: { type: Type.STRING } }, misconceptions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { conceptId: { type: Type.STRING }, conceptName: { type: Type.STRING }, description: { type: Type.STRING }, alternativeExplanation: { type: Type.STRING }, analogy: { type: Type.STRING }, simplerExample: { type: Type.STRING } } } }, recommendedRevision: { type: Type.ARRAY, items: { type: Type.STRING } }, suggestedNextTopic: { type: Type.STRING }, summary: { type: Type.STRING } }, required: ['score', 'conceptsUnderstood', 'strongAreas', 'weakAreas', 'misconceptions', 'recommendedRevision', 'suggestedNextTopic', 'summary']
+    });
+    return {
+      ...fallback,
+      ...parsed,
+      lessonId: lesson.id,
+      score: Number(parsed.score) || fallback.score,
+      conceptsUnderstood: Array.isArray(parsed.conceptsUnderstood) ? parsed.conceptsUnderstood : fallback.conceptsUnderstood,
+      strongAreas: Array.isArray(parsed.strongAreas) ? parsed.strongAreas : fallback.strongAreas,
+      weakAreas: Array.isArray(parsed.weakAreas) ? parsed.weakAreas : fallback.weakAreas,
+      recommendedRevision: Array.isArray(parsed.recommendedRevision) ? parsed.recommendedRevision : fallback.recommendedRevision,
+      suggestedNextTopic: parsed.suggestedNextTopic || fallback.suggestedNextTopic,
+      summary: parsed.summary || fallback.summary,
+      misconceptions: Array.isArray(parsed.misconceptions)
+        ? parsed.misconceptions.map((m) => ({ ...m, id: uid('mis'), conceptId: m.conceptId || 'unknown', conceptName: m.conceptName || 'Unknown concept', description: m.description || '', alternativeExplanation: m.alternativeExplanation || '', analogy: m.analogy || '', simplerExample: m.simplerExample || '' })) as Misconception[]
+        : fallback.misconceptions,
+    };
+  } catch (error) {
+    console.error('Gemini learning report error:', error);
+    return fallback;
+  }
+}
+
+function buildFallbackLearningReport(lesson: Lesson, result: AssessmentResult): LearningReport {
   const concepts = lesson.concepts;
   const correctConceptIds = new Set(
     result.answers.filter((a) => a.isCorrect).map((a) => (a as any).conceptId || a.questionId)

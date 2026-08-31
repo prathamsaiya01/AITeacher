@@ -31,6 +31,20 @@ export default function DashboardPage() {
   const stats = dashboardStats as DashboardStats;
   const entries = progressEntries as ProgressEntry[];
 
+  if (stats.lessonsCompleted === 0) {
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="max-w-6xl mx-auto relative z-10">
+          <h1 className="font-display text-3xl font-bold text-white mb-1">Welcome back, {student?.name}</h1>
+          <div className="glass-card p-8 mt-8 text-center">
+            <BookOpen className="w-10 h-10 text-cyan-300 mx-auto mb-4" />
+            <p className="text-slate-300">No learning activity recorded yet. Complete your first lesson to track progress!</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen px-4 py-8">
       <div className="absolute top-1/4 right-1/4 w-72 h-72 bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />

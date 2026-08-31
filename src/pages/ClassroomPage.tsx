@@ -2,15 +2,17 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { generateQuestion, evaluateAnswer } from '@/services/aiService';
-import { continueTeachingTurn, getConceptGreeting } from '@/services/teacherService';
+import { continueTeachingTurn } from '@/services/teacherService';
 import { retrieveRelevantContext } from '@/services/ragService';
-import type { ChatMessage, SuggestedVisual } from '@/services/teacherService';
+import { cancelSpeech, speak, startListening } from '@/services/voiceService';
+import { setAvatarTalking } from '@/services/avatarService';
+import type { SuggestedVisual } from '@/services/teacherService';
 import {
-  Brain, Volume2, VolumeX, Send, CheckCircle2, XCircle, Lightbulb, TrendingUp,
+  Brain, Volume2, VolumeX, Mic, MicOff, Send, CheckCircle2, XCircle, Lightbulb, TrendingUp,
   Clock, BookOpen, HelpCircle, Eye, Code, Calculator, FlaskConical, Scroll, Zap,
   ChevronRight, RotateCcw, Sparkles, MessageSquare,
 } from 'lucide-react';
-import type { Question, Evaluation, SubjectType } from '@/models';
+import type { Question, Evaluation, SubjectType, ChatMessage } from '@/models';
 
 const subjectIcons: Record<SubjectType, typeof Code> = {
   Mathematics: Calculator,
@@ -137,20 +139,28 @@ export default function ClassroomPage() {
   const [teacherMessage, setTeacherMessage] = useState('');
   const [difficulty, setDifficulty] = useState(2);
   const [voiceOn, setVoiceOn] = useState(true);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [suggestedVisual, setSuggestedVisual] = useState<SuggestedVisual | undefined>(undefined);
   const [retrievedContext, setRetrievedContext] = useState<string[]>([]);
+  const [greetingError, setGreetingError] = useState<string | null>(null);
+  const [visualTab, setVisualTab] = useState<'visuals' | 'notes' | 'code'>('visuals');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const subject = lesson?.subject || 'General';
   const SubjectIcon = subjectIcons[subject];
-  const currentSegment = lesson?.segments[segmentIndex];
-  const currentConcept = lesson?.concepts.find((c) => c.id === currentSegment?.conceptId);
-  const lessonProgress = lesson ? Math.round((segmentIndex / lesson.segments.length) * 100) : 0;
+  const lessonSegments = lesson?.segments || [];
+  const lessonConcepts = lesson?.concepts || [];
+  const currentSegment = lessonSegments[segmentIndex];
+  const currentConcept = lessonConcepts.find((c) => c.id === currentSegment?.conceptId);
+  const lessonProgress = lessonSegments.length > 0
+    ? Math.round((segmentIndex / lessonSegments.length) * 100)
+    : 0;
 
   useEffect(() => {
-    if (!lesson) {
+    if (!lesson || !student) {
       navigate('/learn');
       return;
     }
@@ -158,8 +168,16 @@ export default function ClassroomPage() {
     // Initialize with concept greeting using AI Teaching Loop
     const initializeLesson = async () => {
       setIsThinking(true);
+      setGreetingError(null);
       try {
-        const response = await getConceptGreeting(student!, lesson, 0, retrievedContext.length > 0 ? retrievedContext : undefined);
+        const response = await continueTeachingTurn(
+          student,
+          lesson,
+          0,
+          [],
+          undefined,
+          retrievedContext.length > 0 ? retrievedContext : undefined
+        );
         setTeacherMessage(response.teacherMessage);
         setHistory([{ 
           role: 'teacher', 
@@ -171,38 +189,103 @@ export default function ClassroomPage() {
         }
       } catch (error) {
         console.error('Error initializing lesson:', error);
-        setTeacherMessage(`Hello ${student?.name}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`);
-        setHistory([{ 
-          role: 'teacher', 
-          content: `Hello ${student?.name}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`,
-          timestamp: new Date().toISOString(),
-        }]);
+        const fallbackMessage = `Hello ${student?.name || 'there'}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`;
+        setGreetingError('The AI teacher could not connect. You can continue with the lesson, or try again later.');
+        setTeacherMessage(fallbackMessage);
       } finally {
         setIsThinking(false);
       }
     };
 
     initializeLesson();
-  }, [lesson, navigate, student]);
+  }, [lesson, navigate, retrievedContext, student]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history, isThinking]);
+
+  const addTeacherMessage = useCallback((msg: string) => {
+    setTeacherMessage(msg);
+    setHistory((h) => [...h, {
+      role: 'teacher',
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
+  }, []);
+
+  const addStudentMessage = useCallback((msg: string) => {
+    setHistory((h) => [...h, {
+      role: 'student',
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
+  }, []);
+
+  const speakTeacherMessage = useCallback(async (message: string, force = false) => {
+    if (!voiceOn && !force) return;
+    const language = student?.language === 'Hindi' || student?.language === 'Hinglish' ? 'hi-IN' : 'en-US';
+    try {
+      setIsSpeaking(true);
+      setAvatarTalking(true);
+      await speak(message, {
+        language,
+        onStart: () => {
+          setIsSpeaking(true);
+          setAvatarTalking(true);
+        },
+        onEnd: () => {
+          setIsSpeaking(false);
+          setAvatarTalking(false);
+        },
+      });
+    } catch (error) {
+      console.warn('Voice playback unavailable:', error);
+      setIsSpeaking(false);
+      setAvatarTalking(false);
+    }
+  }, [student?.language, voiceOn]);
+
+  const handleMicInput = useCallback(async () => {
+    if (isListening) return;
+    const language = student?.language === 'Hindi' || student?.language === 'Hinglish' ? 'hi-IN' : 'en-US';
+    try {
+      setIsListening(true);
+      const transcript = await startListening({ language });
+      setAnswerInput(transcript);
+    } catch (error) {
+      console.warn('Voice input unavailable:', error);
+      setGreetingError('Microphone input is unavailable. Please check browser permissions or type your answer.');
+    } finally {
+      setIsListening(false);
+    }
+  }, [isListening, student?.language]);
 
   /**
    * Execute a teaching turn using AI Teaching Loop service
    */
   const executeContinueLessonTurn = useCallback(
     async (userMessage?: string, skipAdvance = false) => {
-      if (!lesson || !student) return;
+      if (!lesson || !student) {
+        setGreetingError('No active lesson or student was found. Returning to your lessons.');
+        navigate('/learn');
+        return;
+      }
 
       setIsThinking(true);
+      setGreetingError(null);
       try {
+        const turnHistory = userMessage
+          ? [...history, {
+              role: 'student' as const,
+              content: userMessage,
+              timestamp: new Date().toISOString(),
+            }]
+          : history;
         const response = await continueTeachingTurn(
           student,
           lesson,
-          currentSegment?.conceptId ? lesson.concepts.findIndex((c) => c.id === currentSegment.conceptId) : 0,
-          history,
+          currentSegment?.conceptId ? lessonConcepts.findIndex((c) => c.id === currentSegment.conceptId) : 0,
+          turnHistory,
           userMessage,
           retrievedContext.length > 0 ? retrievedContext : undefined
         );
@@ -221,12 +304,13 @@ export default function ClassroomPage() {
         if (response.suggestedVisual) {
           setSuggestedVisual(response.suggestedVisual);
         }
+        void speakTeacherMessage(response.teacherMessage);
 
         // Handle next action from teaching service
         if (!skipAdvance) {
           if (response.nextAction === 'ask_question') {
             // Generate a question for the student
-            if (lesson && currentSegment) {
+            if (currentSegment) {
               const q = await generateQuestion(currentSegment.conceptId, lesson.subject, difficulty);
               setCurrentQuestion(q);
               setAwaitingAnswer(true);
@@ -242,35 +326,18 @@ export default function ClassroomPage() {
         }
       } catch (error) {
         console.error('Error executing teaching turn:', error);
-        addTeacherMessage('I encountered a technical issue. Let me try again or we can move forward with the lesson.');
+        setGreetingError('The AI teacher is temporarily unavailable. Your conversation is still safe. Please try again.');
       } finally {
         setIsThinking(false);
       }
     },
-    [lesson, student, history, currentSegment, difficulty, retrievedContext, addTeacherMessage]
+    [lesson, student, history, currentSegment, lessonConcepts, difficulty, retrievedContext, addTeacherMessage, navigate, speakTeacherMessage]
   );
-
-  const addTeacherMessage = useCallback((msg: string) => {
-    setTeacherMessage(msg);
-    setHistory((h) => [...h, { 
-      role: 'teacher', 
-      content: msg,
-      timestamp: new Date().toISOString(),
-    }]);
-  }, []);
-
-  const addStudentMessage = useCallback((msg: string) => {
-    setHistory((h) => [...h, { 
-      role: 'student', 
-      content: msg,
-      timestamp: new Date().toISOString(),
-    }]);
-  }, []);
 
   const advanceSegment = useCallback(() => {
     if (!lesson) return;
     const nextIdx = segmentIndex + 1;
-    if (nextIdx >= lesson.segments.length) {
+    if (nextIdx >= lessonSegments.length) {
       // Lesson complete → go to assessment
       if (lesson) {
         setLesson({ ...lesson, status: 'in-progress' });
@@ -300,6 +367,8 @@ export default function ClassroomPage() {
     setAnswerInput('');
 
     try {
+      await executeContinueLessonTurn(response, true);
+
       // First evaluate the answer
       const ev = await evaluateAnswer(currentQuestion, {
         questionId: currentQuestion.id,
@@ -328,7 +397,7 @@ export default function ClassroomPage() {
       }
     } catch (error) {
       console.error('Error evaluating answer:', error);
-      addTeacherMessage('I encountered an issue evaluating your answer. Please try again.');
+      setGreetingError('The answer could not be evaluated right now. Please try again.');
     } finally {
       setIsThinking(false);
     }
@@ -360,7 +429,13 @@ export default function ClassroomPage() {
     advanceSegment();
   };
 
-  if (!lesson) return null;
+  if (!lesson) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-white">
+        <p>No active lesson found. Redirecting...</p>
+      </div>
+    );
+  }
 
   /**
    * Render custom suggested visual from teaching service
@@ -402,6 +477,31 @@ export default function ClassroomPage() {
     );
   };
 
+  const renderVisualPanelContent = () => {
+    if (visualTab === 'notes') {
+      return (
+        <div className="p-4 rounded-xl bg-ink-900/40 border border-white/5 text-sm text-slate-300 whitespace-pre-wrap">
+          {currentConcept?.description || 'No notes are available for this concept yet.'}
+        </div>
+      );
+    }
+
+    if (visualTab === 'code') {
+      const codeContent = suggestedVisual?.type === 'code'
+        ? suggestedVisual.content
+        : subject === 'Programming'
+          ? 'No code example has been suggested yet.'
+          : 'Code view is available when the teacher suggests a programming example.';
+      return (
+        <pre className="p-4 rounded-xl bg-ink-900/60 border border-white/5 text-xs text-cyan-200 whitespace-pre-wrap break-words overflow-x-auto">
+          {codeContent}
+        </pre>
+      );
+    }
+
+    return suggestedVisual ? renderSuggestedVisual() : subjectVisuals[subject].content;
+  };
+
   return (
     <div className="min-h-screen px-4 py-6">
       <div className="max-w-7xl mx-auto">
@@ -424,11 +524,34 @@ export default function ClassroomPage() {
               <BookOpen className="w-4 h-4" />
               {lesson.title}
             </div>
-            <button onClick={() => setVoiceOn(!voiceOn)} className="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white">
+            <button onClick={handleMicInput} aria-label="Use microphone" className={`p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white ${isListening ? 'text-error-400 animate-pulse' : ''}`}>
+              {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </button>
+            <button
+              onClick={() => {
+                const nextVoiceOn = !voiceOn;
+                setVoiceOn(nextVoiceOn);
+                if (!nextVoiceOn) {
+                  cancelSpeech();
+                  setIsSpeaking(false);
+                  setAvatarTalking(false);
+                } else if (teacherMessage) {
+                  void speakTeacherMessage(teacherMessage, true);
+                }
+              }}
+              aria-label={voiceOn ? 'Mute teacher' : 'Enable teacher voice'}
+              className="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white"
+            >
               {voiceOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
             </button>
           </div>
         </div>
+
+        {greetingError && (
+          <div role="alert" className="glass-card border border-error-500/30 p-4 mb-4 text-sm text-error-200">
+            {greetingError}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Left: Teacher + interaction */}
@@ -437,8 +560,9 @@ export default function ClassroomPage() {
             <div className="glass-card p-6">
               <div className="flex items-start gap-4">
                 <div className="flex-shrink-0">
-                  <div className={`w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center ${isThinking ? 'animate-pulse-glow' : ''}`}>
+                  <div className={`relative w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center ${isThinking || isSpeaking ? 'animate-pulse-glow' : ''}`}>
                     <Brain className="w-10 h-10 text-white" />
+                    {isSpeaking && <span className="absolute -right-1 -top-1 w-3 h-3 rounded-full bg-success-400 animate-ping" />}
                   </div>
                   <div className="text-center text-xs text-slate-400 mt-2">Prof. Nova</div>
                 </div>
@@ -582,7 +706,7 @@ export default function ClassroomPage() {
             {/* Continue button (when not awaiting answer) */}
             {!awaitingAnswer && !evaluation && !isThinking && currentSegment && currentSegment.type !== 'question' && (
               <button onClick={advanceSegment} className="btn-primary w-full flex items-center justify-center gap-2">
-                {segmentIndex >= lesson.segments.length - 1 ? 'Go to Assessment' : 'Continue'}
+                {segmentIndex >= lessonSegments.length - 1 ? 'Go to Assessment' : 'Continue'}
                 <ChevronRight className="w-4 h-4" />
               </button>
             )}
@@ -592,14 +716,30 @@ export default function ClassroomPage() {
           <div className="space-y-4">
             {/* Subject visual or AI-generated visual */}
             <div className="glass-card p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <SubjectIcon className="w-5 h-5 text-cyan-300" />
-                <span className="text-sm font-semibold text-white">
-                  {suggestedVisual ? 'Suggested Visual' : subjectVisuals[subject].label}
-                </span>
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <SubjectIcon className="w-5 h-5 text-cyan-300" />
+                  <span className="text-sm font-semibold text-white">
+                    {suggestedVisual ? 'Suggested Visual' : subjectVisuals[subject].label}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg bg-ink-900/50 p-1" role="tablist" aria-label="Classroom viewer">
+                  {(['visuals', 'notes', 'code'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={visualTab === tab}
+                      onClick={() => setVisualTab(tab)}
+                      className={`px-2 py-1 rounded-md text-xs capitalize transition-colors ${visualTab === tab ? 'bg-violet-500/20 text-violet-200' : 'text-slate-500 hover:text-white'}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="min-h-[120px]">
-                {suggestedVisual ? renderSuggestedVisual() : subjectVisuals[subject].content}
+                {renderVisualPanelContent()}
               </div>
             </div>
 
@@ -639,7 +779,7 @@ export default function ClassroomPage() {
                 />
               </div>
               <div className="text-xs text-slate-500 mt-2">
-                Segment {segmentIndex + 1} of {lesson.segments.length}
+                Segment {segmentIndex + 1} of {lessonSegments.length}
               </div>
             </div>
 
@@ -653,7 +793,7 @@ export default function ClassroomPage() {
                 {strongConcepts.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
                     {strongConcepts.map((id) => {
-                      const c = lesson.concepts.find((c) => c.id === id);
+                      const c = lessonConcepts.find((c) => c.id === id);
                       return c ? <span key={id} className="text-xs px-2 py-1 rounded-full bg-success-500/15 text-success-400">{c.name}</span> : null;
                     })}
                   </div>
@@ -669,7 +809,7 @@ export default function ClassroomPage() {
                 {weakConcepts.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
                     {weakConcepts.map((id) => {
-                      const c = lesson.concepts.find((c) => c.id === id);
+                      const c = lessonConcepts.find((c) => c.id === id);
                       return c ? <span key={id} className="text-xs px-2 py-1 rounded-full bg-error-500/15 text-error-400">{c.name}</span> : null;
                     })}
                   </div>
