@@ -212,3 +212,10 @@ export interface TeachingVideo {
   status: 'generating' | 'ready' | 'error';
   transcript: string;
 }
+
+export interface ChatMessage {
+  role: 'teacher' | 'student';
+  content: string;
+  timestamp: string;
+  conceptId?: string;
+}

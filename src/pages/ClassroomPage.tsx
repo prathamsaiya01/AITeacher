@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { generateQuestion, evaluateAnswer } from '@/services/aiService';
+import { continueTeachingTurn, getConceptGreeting } from '@/services/teacherService';
+import { retrieveRelevantContext } from '@/services/ragService';
+import type { ChatMessage, SuggestedVisual } from '@/services/teacherService';
 import {
   Brain, Volume2, VolumeX, Send, CheckCircle2, XCircle, Lightbulb, TrendingUp,
   Clock, BookOpen, HelpCircle, Eye, Code, Calculator, FlaskConical, Scroll, Zap,
@@ -134,8 +137,10 @@ export default function ClassroomPage() {
   const [teacherMessage, setTeacherMessage] = useState('');
   const [difficulty, setDifficulty] = useState(2);
   const [voiceOn, setVoiceOn] = useState(true);
-  const [history, setHistory] = useState<{ role: 'teacher' | 'student'; content: string }[]>([]);
+  const [history, setHistory] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [suggestedVisual, setSuggestedVisual] = useState<SuggestedVisual | undefined>(undefined);
+  const [retrievedContext, setRetrievedContext] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const subject = lesson?.subject || 'General';
@@ -149,22 +154,117 @@ export default function ClassroomPage() {
       navigate('/learn');
       return;
     }
-    // Initial teacher message
-    setTeacherMessage(`Hello ${student?.name}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`);
-    setHistory([{ role: 'teacher', content: `Hello ${student?.name}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!` }]);
+
+    // Initialize with concept greeting using AI Teaching Loop
+    const initializeLesson = async () => {
+      setIsThinking(true);
+      try {
+        const response = await getConceptGreeting(student!, lesson, 0, retrievedContext.length > 0 ? retrievedContext : undefined);
+        setTeacherMessage(response.teacherMessage);
+        setHistory([{ 
+          role: 'teacher', 
+          content: response.teacherMessage,
+          timestamp: new Date().toISOString(),
+        }]);
+        if (response.suggestedVisual) {
+          setSuggestedVisual(response.suggestedVisual);
+        }
+      } catch (error) {
+        console.error('Error initializing lesson:', error);
+        setTeacherMessage(`Hello ${student?.name}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`);
+        setHistory([{ 
+          role: 'teacher', 
+          content: `Hello ${student?.name}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`,
+          timestamp: new Date().toISOString(),
+        }]);
+      } finally {
+        setIsThinking(false);
+      }
+    };
+
+    initializeLesson();
   }, [lesson, navigate, student]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history, isThinking]);
 
+  /**
+   * Execute a teaching turn using AI Teaching Loop service
+   */
+  const executeContinueLessonTurn = useCallback(
+    async (userMessage?: string, skipAdvance = false) => {
+      if (!lesson || !student) return;
+
+      setIsThinking(true);
+      try {
+        const response = await continueTeachingTurn(
+          student,
+          lesson,
+          currentSegment?.conceptId ? lesson.concepts.findIndex((c) => c.id === currentSegment.conceptId) : 0,
+          history,
+          userMessage,
+          retrievedContext.length > 0 ? retrievedContext : undefined
+        );
+
+        setTeacherMessage(response.teacherMessage);
+        if (!userMessage) {
+          setHistory([{ 
+            role: 'teacher', 
+            content: response.teacherMessage,
+            timestamp: new Date().toISOString(),
+          }]);
+        } else {
+          addTeacherMessage(response.teacherMessage);
+        }
+
+        if (response.suggestedVisual) {
+          setSuggestedVisual(response.suggestedVisual);
+        }
+
+        // Handle next action from teaching service
+        if (!skipAdvance) {
+          if (response.nextAction === 'ask_question') {
+            // Generate a question for the student
+            if (lesson && currentSegment) {
+              const q = await generateQuestion(currentSegment.conceptId, lesson.subject, difficulty);
+              setCurrentQuestion(q);
+              setAwaitingAnswer(true);
+              const opts = q.options ? '\n\n' + q.options.map((o, i) => `${String.fromCharCode(65 + i)}) ${o.label}`).join('\n') : '';
+              // Teacher message already set by continueTeachingTurn
+            }
+          } else if (response.nextAction === 'next_concept' || response.nextAction === 'explain') {
+            // Auto-advance after a short delay
+            setTimeout(() => {
+              advanceSegment();
+            }, 1500);
+          }
+        }
+      } catch (error) {
+        console.error('Error executing teaching turn:', error);
+        addTeacherMessage('I encountered a technical issue. Let me try again or we can move forward with the lesson.');
+      } finally {
+        setIsThinking(false);
+      }
+    },
+    [lesson, student, history, currentSegment, difficulty, retrievedContext, addTeacherMessage]
+  );
+
   const addTeacherMessage = useCallback((msg: string) => {
     setTeacherMessage(msg);
-    setHistory((h) => [...h, { role: 'teacher', content: msg }]);
+    setHistory((h) => [...h, { 
+      role: 'teacher', 
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
   }, []);
 
   const addStudentMessage = useCallback((msg: string) => {
-    setHistory((h) => [...h, { role: 'student', content: msg }]);
+    setHistory((h) => [...h, { 
+      role: 'student', 
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
   }, []);
 
   const advanceSegment = useCallback(() => {
@@ -179,43 +279,14 @@ export default function ClassroomPage() {
       return;
     }
     setSegmentIndex(nextIdx);
-    const seg = lesson.segments[nextIdx];
-    if (seg.type === 'teach') {
-      const concept = lesson.concepts.find((c) => c.id === seg.conceptId);
-      setIsThinking(true);
-      setTimeout(() => {
-        setIsThinking(false);
-        addTeacherMessage(`Now let's learn about ${concept?.name}. ${concept?.description}`);
-      }, 1200);
-    } else if (seg.type === 'example') {
-      const concept = lesson.concepts.find((c) => c.id === seg.conceptId);
-      setIsThinking(true);
-      setTimeout(() => {
-        setIsThinking(false);
-        addTeacherMessage(`Here's an example for ${concept?.name}. Take a look at the visual area on the right.`);
-      }, 1000);
-    } else if (seg.type === 'question') {
-      const concept = lesson.concepts.find((c) => c.id === seg.conceptId);
-      setIsThinking(true);
-      generateQuestion(seg.conceptId, lesson.subject, difficulty).then((q) => {
-        setIsThinking(false);
-        setCurrentQuestion(q);
-        setAwaitingAnswer(true);
-        setEvaluation(null);
-        setShowReExplain(false);
-        setSelectedOption(null);
-        setAnswerInput('');
-        const opts = q.options ? '\n\n' + q.options.map((o, i) => `${String.fromCharCode(65 + i)}) ${o.label}`).join('\n') : '';
-        addTeacherMessage(`Time for a question! ${q.prompt}${opts}`);
-      });
-    } else if (seg.type === 'summary') {
-      setIsThinking(true);
-      setTimeout(() => {
-        setIsThinking(false);
-        addTeacherMessage(`Great job! Let's summarize what we've covered today. You've learned: ${lesson.concepts.map((c) => c.name).join(', ')}. Ready for your assessment?`);
-      }, 1000);
-    }
-  }, [lesson, segmentIndex, difficulty, addTeacherMessage, navigate, setLesson]);
+    setCurrentQuestion(null);
+    setAwaitingAnswer(false);
+    setEvaluation(null);
+    setShowReExplain(false);
+    
+    // Use AI Teaching Loop for segment transitions
+    executeContinueLessonTurn(undefined, true);
+  }, [lesson, segmentIndex, navigate, setLesson, executeContinueLessonTurn]);
 
   const handleSubmitAnswer = async () => {
     if (!currentQuestion) return;
@@ -225,32 +296,41 @@ export default function ClassroomPage() {
     addStudentMessage(response);
     setAwaitingAnswer(false);
     setIsThinking(true);
+    setSelectedOption(null);
+    setAnswerInput('');
 
-    const ev = await evaluateAnswer(currentQuestion, {
-      questionId: currentQuestion.id,
-      response,
-      isCorrect: false,
-      timeSpentMs: 5000,
-    });
+    try {
+      // First evaluate the answer
+      const ev = await evaluateAnswer(currentQuestion, {
+        questionId: currentQuestion.id,
+        response,
+        isCorrect: false,
+        timeSpentMs: 5000,
+      });
 
-    setIsThinking(false);
-    setEvaluation(ev);
-    setUnderstanding((u) => Math.max(0, Math.min(100, u + ev.understandingDelta)));
+      setEvaluation(ev);
+      setUnderstanding((u) => Math.max(0, Math.min(100, u + ev.understandingDelta)));
 
-    if (ev.isCorrect) {
-      addTeacherMessage(ev.feedback);
-      if (currentQuestion.conceptId && !strongConcepts.includes(currentQuestion.conceptId)) {
-        setStrongConcepts((s) => [...s, currentQuestion.conceptId]);
-        setWeakConcepts((w) => w.filter((c) => c !== currentQuestion.conceptId));
+      if (ev.isCorrect) {
+        addTeacherMessage(ev.feedback);
+        if (currentQuestion.conceptId && !strongConcepts.includes(currentQuestion.conceptId)) {
+          setStrongConcepts((s) => [...s, currentQuestion.conceptId]);
+          setWeakConcepts((w) => w.filter((c) => c !== currentQuestion.conceptId));
+        }
+        setDifficulty(ev.newDifficulty);
+      } else {
+        addTeacherMessage(ev.feedback);
+        setShowReExplain(true);
+        if (ev.misconception && currentQuestion.conceptId && !weakConcepts.includes(currentQuestion.conceptId)) {
+          setWeakConcepts((w) => [...w, currentQuestion.conceptId]);
+        }
+        setDifficulty(ev.newDifficulty);
       }
-      setDifficulty(ev.newDifficulty);
-    } else {
-      addTeacherMessage(ev.feedback);
-      setShowReExplain(true);
-      if (ev.misconception && currentQuestion.conceptId && !weakConcepts.includes(currentQuestion.conceptId)) {
-        setWeakConcepts((w) => [...w, currentQuestion.conceptId]);
-      }
-      setDifficulty(ev.newDifficulty);
+    } catch (error) {
+      console.error('Error evaluating answer:', error);
+      addTeacherMessage('I encountered an issue evaluating your answer. Please try again.');
+    } finally {
+      setIsThinking(false);
     }
   };
 
@@ -281,6 +361,46 @@ export default function ClassroomPage() {
   };
 
   if (!lesson) return null;
+
+  /**
+   * Render custom suggested visual from teaching service
+   */
+  const renderSuggestedVisual = () => {
+    if (!suggestedVisual) return null;
+
+    return (
+      <div className="p-4 rounded-xl bg-ink-900/40 border border-white/5">
+        <div className="text-xs text-slate-400 mb-2 font-semibold">
+          {suggestedVisual.type.charAt(0).toUpperCase() + suggestedVisual.type.slice(1)}
+        </div>
+        {suggestedVisual.type === 'equation' && (
+          <div className="font-mono text-sm space-y-2">
+            <div className="text-cyan-300 whitespace-pre-wrap break-words">{suggestedVisual.content}</div>
+          </div>
+        )}
+        {suggestedVisual.type === 'code' && (
+          <div className="font-mono text-xs space-y-1 overflow-x-auto">
+            <div className="text-violet-300 whitespace-pre-wrap break-words">{suggestedVisual.content}</div>
+          </div>
+        )}
+        {(suggestedVisual.type === 'diagram' || suggestedVisual.type === 'flowchart') && (
+          <div className="text-sm text-slate-300 whitespace-pre-wrap break-words">
+            {suggestedVisual.content}
+          </div>
+        )}
+        {suggestedVisual.type === 'timeline' && (
+          <div className="text-sm text-slate-300">
+            {suggestedVisual.content}
+          </div>
+        )}
+        {suggestedVisual.description && (
+          <div className="text-xs text-slate-500 mt-2 italic">
+            {suggestedVisual.description}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen px-4 py-6">
@@ -470,14 +590,16 @@ export default function ClassroomPage() {
 
           {/* Right: Visuals + progress */}
           <div className="space-y-4">
-            {/* Subject visual */}
+            {/* Subject visual or AI-generated visual */}
             <div className="glass-card p-6">
               <div className="flex items-center gap-2 mb-4">
                 <SubjectIcon className="w-5 h-5 text-cyan-300" />
-                <span className="text-sm font-semibold text-white">{subjectVisuals[subject].label}</span>
+                <span className="text-sm font-semibold text-white">
+                  {suggestedVisual ? 'Suggested Visual' : subjectVisuals[subject].label}
+                </span>
               </div>
               <div className="min-h-[120px]">
-                {subjectVisuals[subject].content}
+                {suggestedVisual ? renderSuggestedVisual() : subjectVisuals[subject].content}
               </div>
             </div>
 

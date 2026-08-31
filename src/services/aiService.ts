@@ -20,6 +20,8 @@ import type {
   AssessmentQuestion,
   SubjectType,
 } from '@/models';
+import { processDocument } from './documentService';
+import { storeDocumentInSupabase } from './ragService';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
@@ -108,10 +110,10 @@ export async function generateLesson(
   extraParams?: Partial<GenerateLessonParams>
 ): Promise<Lesson> {
   const subject = detectSubject(topic);
-  const studentLevel = extraParams?.studentLevel || student.gradeLevel || 'High School';
-  const language = extraParams?.language || student.preferredLanguage || 'English';
+  const studentLevel = extraParams?.studentLevel || student.level || 'Intermediate';
+  const language = extraParams?.language || student.language || 'English';
   const learningGoal = extraParams?.learningGoal || 'Master core concepts';
-  const teachingStyle = extraParams?.teachingStyle || student.learningStyle || 'Visual';
+  const teachingStyle = extraParams?.teachingStyle || student.teachingStyle || 'Visual';
   const availableTime = extraParams?.availableTime || '30 minutes';
   const desiredDepth = extraParams?.desiredDepth || 'Intermediate';
 
@@ -460,23 +462,37 @@ export async function generateLearningPath(student: Student): Promise<LearningPa
   return { id: uid('path'), title: 'Machine Learning Path', studentId: student.id, nodes };
 }
 
-// ---------- Document upload (mock) ----------
+// ---------- Document upload (Phase 2 - Real implementation) ----------
 export async function uploadDocument(file: File): Promise<UploadedDocument> {
-  await delay(1500);
-  const ext = file.name.split('.').pop()?.toLowerCase() || 'txt';
-  return {
-    id: uid('doc'),
-    fileName: file.name,
-    fileType: ext,
-    sizeBytes: file.size,
-    extractedText: `[Extracted content from ${file.name}]\n\nThis document covers key concepts, definitions, and examples related to the topic. The AI will use this material to build a personalized lesson plan tailored to your level and goals.`,
-    chunks: [
-      { id: 'chunk1', text: 'Introduction and overview of the main topic.', embedding: Array.from({ length: 8 }, () => Math.random()) },
-      { id: 'chunk2', text: 'Core concepts and definitions.', embedding: Array.from({ length: 8 }, () => Math.random()) },
-      { id: 'chunk3', text: 'Examples and applications.', embedding: Array.from({ length: 8 }, () => Math.random()) },
-    ],
-    uploadedAt: new Date().toISOString(),
-  };
+  try {
+    // Process the document: extract text, chunk, and generate embeddings
+    const processedDoc = await processDocument(file);
+
+    // Store the processed document in Supabase with vector embeddings
+    const stored = await storeDocumentInSupabase(processedDoc);
+
+    if (!stored) {
+      console.warn('Document stored locally but Supabase storage failed');
+    }
+
+    // Return the UploadedDocument object with proper structure
+    return {
+      id: uid('doc'),
+      fileName: processedDoc.fileName,
+      fileType: processedDoc.fileType,
+      sizeBytes: processedDoc.sizeBytes,
+      extractedText: processedDoc.extractedText,
+      chunks: processedDoc.chunks.map((chunk) => ({
+        id: chunk.id,
+        text: chunk.text,
+        embedding: chunk.embedding,
+      })),
+      uploadedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    console.error('Error uploading document:', error);
+    throw new Error(`Failed to upload document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 // ---------- Teaching video (mock) ----------
