@@ -15,24 +15,25 @@ export async function generateEmbedding(text: string): Promise<number[]> {
       throw new Error('Text cannot be empty');
     }
 
-    // Use embedContent method for text-embedding-004 model
-    const response = await (ai.models as any).embedContent({
+    const response = await ai.models.embedContent({
       model: 'text-embedding-004',
-      content: { parts: [{ text }] },
+      contents: text,
     });
 
-    // Extract embedding from response
-    const embedding = response?.embedding;
-    
+    // Current SDKs expose `embeddings[0]`; retain the singular shape for
+    // compatibility with providers/SDK versions that return `embedding`.
+    const embedding = (response as typeof response & {
+      embedding?: { values?: number[] };
+    }).embedding?.values ?? response.embeddings?.[0]?.values;
     if (!embedding || !Array.isArray(embedding)) {
       console.warn('No embedding returned from API, using fallback');
-      return Array(768).fill(0);
+      return new Array(768).fill(0);
     }
 
     return embedding;
   } catch (error) {
     console.error('Error generating embedding:', error);
     // Fallback: return zero-vector of dimension 768 on error
-    return Array(768).fill(0);
+    return new Array(768).fill(0);
   }
 }

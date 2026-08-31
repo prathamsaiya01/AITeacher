@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { queryOllamaTeacher } from '@/services/ollamaService';
 import type {
   Student,
   Lesson,
@@ -10,16 +11,20 @@ import type {
 } from '@/models';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
-if (!apiKey) console.warn("VITE_GEMINI_API_KEY is missing from environment variables.");
+if (!apiKey) console.warn("VITE_GEMINI_API_KEY is empty or undefined in import.meta.env");
 const ai = new GoogleGenAI({ apiKey });
+
+const SOCRATIC_OPENING_FALLBACK =
+  "Let's explore this together. Before we begin, what is one idea or example you already connect with this topic?";
 
 /**
  * Suggested visual representation for a concept
  */
 export interface SuggestedVisual {
   type: 'equation' | 'diagram' | 'timeline' | 'code' | 'flowchart';
+  title: string;
   content: string;
-  description?: string;
+  explanation: string;
 }
 
 export interface TeachingTurnResponse {
@@ -36,12 +41,8 @@ export interface TeachingResponse extends TeachingTurnResponse {
   misconceptionDetected?: string;
 }
 
-function createFallbackResponse(message: string): TeachingResponse {
-  const visual: SuggestedVisual = {
-    type: 'diagram',
-    content: 'Start with what you already know, then connect it to the current concept.',
-    description: 'A simple learning path for the current concept',
-  };
+function createFallbackResponse(message: string, subject: SubjectType = 'General'): TeachingResponse {
+  const visual = subjectVisualFallback(subject);
 
   return {
     teacherMessage: message,
@@ -55,25 +56,25 @@ function createFallbackResponse(message: string): TeachingResponse {
 
 function subjectVisualFallback(subject: SubjectType): SuggestedVisual {
   const visualBySubject: Record<SubjectType, SuggestedVisual> = {
-    Mathematics: { type: 'equation', content: 'Known values → substitution → solve step by step', description: 'Work through the equation one operation at a time.' },
-    Physics: { type: 'diagram', content: '[Object]  → Force / motion / energy →  [Result]', description: 'Label the quantities and directions involved.' },
-    Biology: { type: 'flowchart', content: 'Input → cell or organ system process → output', description: 'Follow the biological process in order.' },
-    History: { type: 'timeline', content: 'Cause → key event → consequence', description: 'Place events in chronological order.' },
-    Programming: { type: 'code', content: '// input\n// process\n// output', description: 'Trace the program from input to output.' },
-    General: { type: 'diagram', content: 'Core idea → supporting ideas → application', description: 'Connect the central concept to its parts.' },
+    Mathematics: { type: 'equation', title: 'Step-by-step equation', content: 'Known values → substitution → solve step by step', explanation: 'Work through the equation one operation at a time.' },
+    Physics: { type: 'equation', title: 'Physics equation', content: 'Known quantity → governing equation → solved quantity', explanation: 'Use the governing relationship to connect the physical quantities.' },
+    Biology: { type: 'flowchart', title: 'Biological process', content: 'Input → cell or organ system process → output', explanation: 'Follow the biological process in order.' },
+    History: { type: 'timeline', title: 'Event timeline', content: 'Cause → key event → consequence', explanation: 'Place events in chronological order.' },
+    Programming: { type: 'code', title: 'Runnable code example', content: '// input\n// process\n// output', explanation: 'Trace the program from input to output.' },
+    General: { type: 'diagram', title: 'Concept map', content: 'Core idea → supporting ideas → application', explanation: 'Connect the central concept to its parts.' },
   };
   return visualBySubject[subject];
 }
 
 function normalizeSuggestedVisual(value: unknown, subject: SubjectType = 'General'): SuggestedVisual {
   if (value && typeof value === 'object') {
-    const visual = value as Partial<SuggestedVisual>;
+    const visual = value as Partial<SuggestedVisual> & { description?: string };
     const validTypes: SuggestedVisual['type'][] = ['equation', 'diagram', 'timeline', 'code', 'flowchart'];
     if (validTypes.includes(visual.type as SuggestedVisual['type']) && typeof visual.content === 'string') {
       const requestedType = visual.type as SuggestedVisual['type'];
       const preferredTypes: Record<SubjectType, SuggestedVisual['type'][]> = {
         Mathematics: ['equation'],
-        Physics: ['diagram', 'flowchart'],
+        Physics: ['equation', 'diagram', 'flowchart'],
         Biology: ['flowchart', 'diagram'],
         History: ['timeline'],
         Programming: ['code'],
@@ -82,7 +83,12 @@ function normalizeSuggestedVisual(value: unknown, subject: SubjectType = 'Genera
       if (!preferredTypes[subject].includes(requestedType)) {
         return subjectVisualFallback(subject);
       }
-      return { type: requestedType, content: visual.content, description: visual.description };
+      return {
+        type: requestedType,
+        title: visual.title?.trim() || `${subject} visual guide`,
+        content: visual.content,
+        explanation: visual.explanation?.trim() || visual.description?.trim() || 'Use this visual to connect the key steps and relationships.',
+      };
     }
   }
 
@@ -114,7 +120,7 @@ function subjectVisualInstruction(subject: SubjectType): string {
     case 'Mathematics':
       return 'Prefer equation visuals with readable LaTeX/plain-text formulas and step-by-step derivations.';
     case 'Physics':
-      return 'Prefer structural formulas, force/motion diagrams, and clearly ordered motion or process flows.';
+      return 'Return an equation visual whenever a governing relationship applies; use a diagram or flowchart only when the concept cannot be represented meaningfully by an equation.';
     case 'Biology':
       return 'Prefer labeled component trees, relationship diagrams, and ordered biological process flows.';
     case 'History':
@@ -195,8 +201,15 @@ You MUST follow this 5-stage process:
 - If the student struggles, offer a simpler entry point before retreating to the current explanation.
 - If the student shows mastery, probe deeper or suggest moving forward.
 
-## Visual Suggestions
-When appropriate, suggest visuals using these types:
+## Required Rich Visual
+ALWAYS include a complete suggestedVisual object. It must be specific to the current concept, not a generic placeholder.
+- Tailor the visual to the ACTIVE subject, current concept, and the learner's latest response. Do not reuse examples from another topic.
+- Mathematics and Physics: return type "equation" with a relevant LaTeX/plain-text equation and a step-by-step derivation. Example: {"type":"equation","content":"\\Delta E = h\\nu","explanation":"Energy-frequency relationship"}.
+- Computer Science, Coding, and Programming: return type "code" with a ready-to-run snippet and expected execution output. Example: {"type":"code","content":"def binary_search(items, target): ...\\n# Expected output: index or -1","explanation":"O(log n) lookup"}.
+- History and Social Studies: return type "timeline" with chronological, dated events. Example: {"type":"timeline","content":"1914: Outbreak | 1917: US Entry | 1918: Armistice","explanation":"Key progression of the conflict"}.
+- Biology and other science/process topics: return type "flowchart" using clean arrows or line-separated stages. Example: {"type":"flowchart","content":"Input -> Process -> Output","explanation":"How material or energy moves through the system"}.
+- Use diagrams only for spatial relationships that cannot be communicated more clearly as an equation, timeline, code example, or process flow.
+Use only these types:
 - 'equation': Mathematical formulas or algebraic expressions
 - 'diagram': Visual representations (flowcharts, system diagrams)
 - 'timeline': Historical sequences or process flows
@@ -219,8 +232,9 @@ Respond ALWAYS with a valid JSON object matching this structure:
   "teacherMessage": "Your Socratic response (1-3 paragraphs, engaging and pedagogically sound)",
   "suggestedVisual": {
     "type": "equation|diagram|timeline|code|flowchart",
+    "title": "Short, descriptive visual title",
     "content": "Visual content (LaTeX, description, pseudocode, or ASCII art)",
-    "description": "What this visual teaches"
+    "explanation": "What this visual teaches and how to read it"
   },
   "nextAction": "explain|ask_question|evaluate|next_concept",
   "confidence": 0.0-1.0,
@@ -262,17 +276,14 @@ export async function continueTeachingTurn(
       throw new Error(`Concept at index ${currentConceptIndex} not found`);
     }
 
-    if (!apiKey) {
-      throw new Error('VITE_GEMINI_API_KEY is not configured');
-    }
-
     const activeLanguage = resolveLanguage(student, language, userMessage);
 
     // Build the system prompt with pedagogical context
     const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage);
 
     // Build conversation history for context
-    const conversationHistory = chatHistory
+    const safeChatHistory = Array.isArray(chatHistory) ? chatHistory : [];
+    const conversationHistory = safeChatHistory
       .slice(-10) // Keep last 10 messages for context window
       .map((msg) => ({
         role: msg.role === 'teacher' ? ('assistant' as const) : ('user' as const),
@@ -280,9 +291,33 @@ export async function continueTeachingTurn(
       }));
 
     // Add current user message if provided
-    const currentUserInput = userMessage?.trim() || "Hello Prof. Nova, let's start the lesson.";
+    const submittedMessage = userMessage?.trim();
+    const currentUserInput = submittedMessage
+      || "The learner clicked Continue without a written answer. Give a short Socratic bridge and ask one focused question about the current concept.";
 
-    // Call Gemini API with structured output
+    // Local Ollama is the primary provider. Its output uses the same structured
+    // visual contract as Gemini, so the classroom receives one universal shape.
+    try {
+      const ollamaResponse = await queryOllamaTeacher(currentUserInput, systemPrompt);
+      const teacherMessage = ollamaResponse.teacherMessage?.trim() || SOCRATIC_OPENING_FALLBACK;
+      const suggestedVisual = normalizeSuggestedVisual(ollamaResponse.suggestedVisual, lesson.subject);
+      return {
+        teacherMessage,
+        suggestedVisual,
+        text: teacherMessage,
+        visual: suggestedVisual,
+        nextAction: 'ask_question',
+        confidence: 0.5,
+      };
+    } catch {
+      console.log("Ollama offline, falling back to Gemini SDK");
+    }
+
+    if (!apiKey) {
+      throw new Error('VITE_GEMINI_API_KEY is not configured');
+    }
+
+    // Gemini is used only when the local provider is unavailable.
     let response;
     try {
       response = await ai.models.generateContent({
@@ -292,11 +327,9 @@ export async function continueTeachingTurn(
           temperature: 0.5,
         },
       });
-    } catch (err) {
-      console.error("Gemini API Error Detail:", err);
-      return createFallbackResponse(
-        'I am having trouble connecting to Gemini. Please check VITE_GEMINI_API_KEY and your network connection, then try again.'
-      );
+    } catch (error) {
+      console.error("Gemini Classroom API Error:", error);
+      return createFallbackResponse(SOCRATIC_OPENING_FALLBACK, lesson.subject);
     }
 
     // Parse the response
@@ -320,12 +353,14 @@ export async function continueTeachingTurn(
       } catch (parseError) {
         console.error('Failed to parse Gemini response:', parseError, 'Raw response:', responseText);
         parsedResponse = createFallbackResponse(
-          'I received an unclear response. Could you tell me what you understand about this concept so far?'
+          'I received an unclear response. Could you tell me what you understand about this concept so far?',
+          lesson.subject
         );
       }
     } else {
       parsedResponse = createFallbackResponse(
-        'I did not receive a response. Could you tell me what you already know about this concept?'
+        'I did not receive a response. Could you tell me what you already know about this concept?',
+        lesson.subject
       );
     }
 
@@ -343,11 +378,9 @@ export async function continueTeachingTurn(
     }
 
     return parsedResponse;
-  } catch (err) {
-    console.error("Gemini API Error Detail:", err);
-    return createFallbackResponse(
-      'I encountered a Gemini connection issue. Please check VITE_GEMINI_API_KEY and your network connection, then try again.'
-    );
+  } catch (error) {
+    console.error("Gemini Classroom API Error:", error);
+    return createFallbackResponse(SOCRATIC_OPENING_FALLBACK, lesson?.subject || 'General');
   }
 }
 

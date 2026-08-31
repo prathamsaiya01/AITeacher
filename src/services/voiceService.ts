@@ -2,6 +2,7 @@ export interface VoiceInputOptions {
   language?: string;
   continuous?: boolean;
   interimResults?: boolean;
+  onTranscript?: (transcript: string, isFinal: boolean) => void;
 }
 
 export interface VoiceOutputOptions {
@@ -62,10 +63,15 @@ class BrowserVoiceService implements VoiceService {
       let transcript = '';
 
       recognition.onresult = (event) => {
+        let latestTranscript = '';
+        let isFinal = false;
         for (let index = event.results.length - 1; index >= 0; index -= 1) {
-          transcript = `${event.results[index][0].transcript} ${transcript}`.trim();
-          if (event.results[index].isFinal) break;
+          latestTranscript = `${event.results[index][0].transcript} ${latestTranscript}`.trim();
+          isFinal = event.results[index].isFinal;
+          if (isFinal) break;
         }
+        transcript = latestTranscript || transcript;
+        options.onTranscript?.(transcript, isFinal);
       };
       recognition.onerror = () => {
         this.recognition = null;

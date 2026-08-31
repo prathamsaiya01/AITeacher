@@ -30,15 +30,6 @@ function metadataFallback(file: File): string {
   return `Document ${file.name} (${fileType}, ${file.size} bytes) contains no readable text.`;
 }
 
-function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = () => reject(reader.error || new Error('Unable to read file as an ArrayBuffer'));
-    reader.readAsArrayBuffer(file);
-  });
-}
-
 function readFileAsText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -79,37 +70,28 @@ export function chunkText(text: string, chunkSize = 500, overlap = 100): string[
 }
 
 /**
- * Extract text from a file (supports PDF and plain text)
+ * Extract printable browser-readable text from a file. PDF binaries do not expose
+ * their page text through browser APIs, but are safely represented by metadata.
  * @param file The file to extract text from
  * @returns Extracted text content
  */
 export async function extractTextFromFile(file: File): Promise<string> {
   try {
-    const fileType = file.type.toLowerCase();
     const extension = getFileExtension(file);
-    let rawText = '';
-
-    // Handle PDF files
-    if (fileType === 'application/pdf' || extension === 'pdf') {
-      try {
-        // Dynamic import to handle optional dependency
-        const pdfModule = (await import('pdf-parse')) as any;
-        const pdfParse = pdfModule.default || pdfModule;
-        const arrayBuffer = await readFileAsArrayBuffer(file);
-        const pdfData = await pdfParse(arrayBuffer);
-        rawText = pdfData.text || '';
-      } catch (pdfError) {
-        console.warn('PDF parsing failed, attempting fallback:', pdfError);
-        rawText = '';
-      }
-    } else if (textFileExtensions.has(extension) || fileType.startsWith('text/')) {
+    // `File.text()` is browser-native and works consistently for text documents.
+    // FileReader remains only as a compatibility fallback for older browsers.
+    let rawText: string;
+    try {
       rawText = await file.text();
-    } else {
-      // Binary and office files are read through FileReader for browser compatibility.
+    } catch {
       rawText = await readFileAsText(file);
     }
 
     const sanitizedText = sanitizeText(rawText);
+    // Avoid embedding raw PDF/office binary noise while keeping processing non-throwing.
+    if ((extension === 'pdf' || !textFileExtensions.has(extension)) && sanitizedText.length < 20) {
+      return metadataFallback(file);
+    }
     return sanitizedText.length >= 20 ? sanitizedText : metadataFallback(file);
   } catch (error) {
     console.error('Error extracting text from file:', error);
