@@ -214,6 +214,7 @@ export default function ClassroomPage() {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [currentVisual, setCurrentVisual] = useState<SuggestedVisual | undefined>(undefined);
+  const [isSubmittingTurn, setIsSubmittingTurn] = useState(false);
   const [retrievedContext, setRetrievedContext] = useState<string[]>([]);
   const [greetingError, setGreetingError] = useState<string | null>(null);
   const [visualTab, setVisualTab] = useState<'visuals' | 'notes' | 'code'>('visuals');
@@ -239,6 +240,11 @@ export default function ClassroomPage() {
     ? Math.round((segmentIndex / lessonSegments.length) * 100)
     : 0;
 
+  const clampUnderstanding = useCallback((value: number) => Math.max(0, Math.min(100, value)), []);
+  const applyUnderstandingDelta = useCallback((delta: number) => {
+    setUnderstanding((current) => clampUnderstanding(current + delta));
+  }, [clampUnderstanding]);
+
   useEffect(() => {
     if (!lesson || !student) {
       navigate('/learn');
@@ -260,6 +266,9 @@ export default function ClassroomPage() {
           student.language
         );
         setTeacherMessage(response.teacherMessage);
+        if (typeof response.confidence === 'number') {
+          setUnderstanding((current) => clampUnderstanding(Math.round(response.confidence! * 100) || current));
+        }
         setHistory([{ 
           role: 'teacher', 
           content: response.teacherMessage,
@@ -269,6 +278,7 @@ export default function ClassroomPage() {
           setCurrentVisual(response.suggestedVisual);
           setVisualTab('visuals');
         }
+        void speakTeacherMessage(response.teacherMessage);
       } catch (error) {
         console.error('Error initializing lesson:', error);
         const fallbackMessage = `Hello ${student?.name || 'there'}! I'm your AI Teacher. Today we'll explore ${lesson.title}. Let's begin!`;
@@ -295,23 +305,6 @@ export default function ClassroomPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history, isThinking]);
 
-  const addTeacherMessage = useCallback((msg: string) => {
-    setTeacherMessage(msg);
-    setHistory((h) => [...h, {
-      role: 'teacher',
-      content: msg,
-      timestamp: new Date().toISOString(),
-    }]);
-  }, []);
-
-  const addStudentMessage = useCallback((msg: string) => {
-    setHistory((h) => [...h, {
-      role: 'student',
-      content: msg,
-      timestamp: new Date().toISOString(),
-    }]);
-  }, []);
-
   const speakTeacherMessage = useCallback(async (message: string, force = false) => {
     if (!voiceOn && !force) return;
     const language = student?.language === 'Hindi' || student?.language === 'Hinglish' ? 'hi-IN' : 'en-US';
@@ -335,6 +328,26 @@ export default function ClassroomPage() {
       setAvatarTalking(false);
     }
   }, [student?.language, voiceOn]);
+
+  const addTeacherMessage = useCallback((msg: string) => {
+    setTeacherMessage(msg);
+    setHistory((h) => [...h, {
+      role: 'teacher',
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
+    if (voiceOn) {
+      void speakTeacherMessage(msg);
+    }
+  }, [speakTeacherMessage, voiceOn]);
+
+  const addStudentMessage = useCallback((msg: string) => {
+    setHistory((h) => [...h, {
+      role: 'student',
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
+  }, []);
 
   const handleMicInput = useCallback(async () => {
     if (isListening) {
@@ -391,6 +404,12 @@ export default function ClassroomPage() {
         );
 
         setTeacherMessage(response.teacherMessage);
+        if (typeof response.confidence === 'number') {
+          setUnderstanding((current) => clampUnderstanding(Math.round(response.confidence! * 100) || current));
+        } else {
+          applyUnderstandingDelta(4);
+        }
+
         if (!userMessage) {
           setHistory([{ 
             role: 'teacher', 
@@ -441,22 +460,26 @@ export default function ClassroomPage() {
 
   const handleSendMessage = useCallback(async (inputText: string) => {
     const message = inputText.trim();
-    if (!message || isThinking || !lesson || !student) return;
+    if (!message || isThinking || isSubmittingTurn || !lesson || !student) return;
+
     const userTurn: ChatMessage = {
       role: 'student',
       content: message,
       timestamp: new Date().toISOString(),
     };
+
     const updatedHistory = [...history, userTurn];
-    // Commit the learner turn before waiting, so the chat remains responsive.
     setHistory(updatedHistory);
     setAnswerInput('');
     setIsThinking(true);
+    setIsSubmittingTurn(true);
     setGreetingError(null);
+
     try {
       const conceptIndex = currentSegment?.conceptId
         ? lessonConcepts.findIndex((concept) => concept.id === currentSegment.conceptId)
         : 0;
+
       const res = await continueTeachingTurn(
         student,
         lesson,
@@ -466,25 +489,30 @@ export default function ClassroomPage() {
         retrievedContext.length > 0 ? retrievedContext : undefined,
         student.language
       );
+
       const teacherTurn: ChatMessage = {
         role: 'teacher',
         content: res.teacherMessage,
         timestamp: new Date().toISOString(),
       };
+
       setTeacherMessage(res.teacherMessage);
       setHistory((latestHistory) => [...latestHistory, teacherTurn]);
+
       if (res.suggestedVisual) {
         setCurrentVisual(res.suggestedVisual);
         setVisualTab('visuals');
       }
+
       void speakTeacherMessage(res.teacherMessage);
     } catch (error) {
       console.error('Error sending classroom message:', error);
-      setGreetingError('Your message could not be processed. Please try again.');
+      setGreetingError('Your message could not be processed. Please try again. The conversation state was preserved.');
     } finally {
       setIsThinking(false);
+      setIsSubmittingTurn(false);
     }
-  }, [currentSegment?.conceptId, history, isThinking, lesson, lessonConcepts, retrievedContext, speakTeacherMessage, student]);
+  }, [currentSegment?.conceptId, history, isThinking, isSubmittingTurn, lesson, lessonConcepts, retrievedContext, speakTeacherMessage, student]);
 
   const advanceSegment = useCallback(() => {
     if (!lesson) return;
@@ -502,10 +530,11 @@ export default function ClassroomPage() {
     setAwaitingAnswer(false);
     setEvaluation(null);
     setShowReExplain(false);
-    
+    applyUnderstandingDelta(8);
+
     // Use AI Teaching Loop for segment transitions
     executeContinueLessonTurn(undefined, true);
-  }, [lesson, segmentIndex, navigate, setLesson, executeContinueLessonTurn]);
+  }, [lesson, segmentIndex, navigate, setLesson, executeContinueLessonTurn, applyUnderstandingDelta]);
 
   const handleSubmitAnswer = async () => {
     if (!currentQuestion) return;
@@ -530,7 +559,7 @@ export default function ClassroomPage() {
       });
 
       setEvaluation(ev);
-      setUnderstanding((u) => Math.max(0, Math.min(100, u + ev.understandingDelta)));
+      setUnderstanding((u) => clampUnderstanding(u + ev.understandingDelta));
 
       if (ev.isCorrect) {
         addTeacherMessage(ev.feedback);
@@ -829,12 +858,18 @@ export default function ClassroomPage() {
 
             {/* Persistent student composer: works for questions as well as free-form discussion. */}
             <form
-              className="glass-card p-3 flex items-end gap-2"
+              className="glass-card relative p-3 flex items-end gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
                 void handleSendMessage(answerInput);
               }}
             >
+              {isThinking && (
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 rounded-full border border-violet-400/20 bg-violet-500/5 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-violet-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-violet-300 animate-pulse" />
+                  Thinking
+                </div>
+              )}
               <textarea
                 value={answerInput}
                 onChange={(event) => setAnswerInput(event.target.value)}
@@ -849,6 +884,9 @@ export default function ClassroomPage() {
                 rows={1}
                 className="input-field min-h-[44px] flex-1 resize-none py-2.5"
               />
+              {isThinking && (
+                <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-violet-400/60 to-transparent" />
+              )}
               <button
                 type="button"
                 onClick={() => void handleMicInput()}

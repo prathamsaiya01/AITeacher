@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
-import { generateLearningPath } from '@/services/aiService';
 import {
   CheckCircle2, Lock, Play, Circle, Sparkles, ChevronRight, Clock,
   BookOpen, ArrowRight, Target,
@@ -28,15 +27,12 @@ export default function LearningPathPage() {
       navigate('/setup');
       return;
     }
-    if (!learningPath) {
-      generateLearningPath(student).then((p) => {
-        setPath(p);
-        setLoading(false);
-      });
-    } else {
-      setLoading(false);
-    }
-  }, [student, learningPath, navigate]);
+    refreshData().then(() => setLoading(false));
+  }, [student, navigate, refreshData]);
+
+  useEffect(() => {
+    setPath(learningPath);
+  }, [learningPath]);
 
   if (loading || !path) {
     return (
@@ -48,6 +44,24 @@ export default function LearningPathPage() {
 
   const completed = path.nodes.filter((n) => n.status === 'completed').length;
   const total = path.nodes.length;
+
+  if (total === 0) {
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="max-w-4xl mx-auto relative z-10">
+          <h1 className="font-display text-3xl font-bold text-white mb-1">Your Learning Path</h1>
+          <div className="glass-card p-8 mt-8 text-center">
+            <BookOpen className="w-10 h-10 text-cyan-300 mx-auto mb-4" />
+            <p className="text-slate-300">Your path will appear here after you complete your first lesson assessment.</p>
+            <button onClick={() => navigate('/learn')} className="btn-primary mt-5 inline-flex items-center gap-2">
+              Start a Lesson
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen px-4 py-8">
@@ -81,25 +95,10 @@ export default function LearningPathPage() {
           </div>
         </div>
 
-        {/* AI recommendation */}
-        <div className="glass-card p-6 mt-8 bg-gradient-to-r from-violet-500/10 to-cyan-500/5">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-violet-500/20 flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-violet-300" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-white">AI Recommendation</h3>
-              <p className="text-sm text-slate-400">Based on your progress and performance</p>
-            </div>
-          </div>
-          <p className="text-slate-300 text-sm mb-4">
-            You're doing great with Python and Math! Focus on <span className="text-violet-300 font-medium">Data Processing</span> next —
-            it's the bridge between your current skills and machine learning. Once you master it,
-            Supervised Learning will feel natural.
-          </p>
+        <div className="mt-8 flex justify-center">
           <button onClick={() => navigate('/learn')} className="btn-primary flex items-center gap-2">
             <BookOpen className="w-4 h-4" />
-            Start Next Lesson
+            Start Another Lesson
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
@@ -108,7 +107,7 @@ export default function LearningPathPage() {
   );
 }
 
-function PathNode({ node, isLast, onLearn }: { node: LearningPathNode; isLast: boolean; onLearn: () => void }) {
+function PathNode({ node, onLearn }: { node: LearningPathNode; isLast?: boolean; onLearn: () => void }) {
   const statusConfig = {
     completed: { icon: CheckCircle2, color: 'text-success-400', bg: 'bg-success-500/20', border: 'border-success-500/30' },
     current: { icon: Play, color: 'text-violet-300', bg: 'bg-violet-500/20', border: 'border-violet-500/40' },

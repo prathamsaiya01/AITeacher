@@ -43,38 +43,42 @@ export default function AssessmentPage() {
   }, [lesson, navigate]);
 
   const handleAnswer = (value: string) => {
-    if (!questions[currentIdx]) return;
-    setResponses((r) => ({ ...r, [questions[currentIdx].id]: value }));
+    const activeQuestion = questions[currentIdx];
+    if (!activeQuestion) return;
+    setResponses((r) => ({ ...r, [activeQuestion.id]: value }));
   };
 
   const handleNext = async () => {
-    const q = questions[currentIdx];
-    const answer = q.options ? selectedOption : textAnswer.trim();
+    const activeQuestion = questions[currentIdx];
+    if (!activeQuestion) return;
+
+    const answer = activeQuestion.options ? selectedOption : textAnswer.trim();
     if (!answer) return;
-    handleAnswer(answer);
+
+    const finalResponses = { ...responses, [activeQuestion.id]: answer };
+    setResponses(finalResponses);
 
     if (currentIdx < questions.length - 1) {
       setCurrentIdx(currentIdx + 1);
       setSelectedOption(null);
       setTextAnswer('');
-    } else {
-      // Submit
-      setSubmitting(true);
-      try {
-        if (!lesson || !student) throw new Error('No active lesson or student found');
-        const finalResponses = { ...responses, [q.id]: answer };
-        const result = await gradeAssessment('assessment_1', lesson.id, questions, finalResponses);
-        await saveCompletedLesson(student.id, lesson);
-        await saveAssessmentResult(student.id, result);
-        setAssessmentResult(result);
-        await refreshProgress();
-        navigate('/report');
-      } catch (error) {
-        console.error('Failed to grade assessment:', error);
-        setError('Unable to grade your assessment right now. Please try submitting again.');
-      } finally {
-        setSubmitting(false);
-      }
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (!lesson || !student) throw new Error('No active lesson or student found');
+      const result = await gradeAssessment('assessment_1', lesson.id, questions, finalResponses);
+      await saveCompletedLesson(student.id, lesson);
+      await saveAssessmentResult(student.id, result);
+      setAssessmentResult(result);
+      await refreshProgress();
+      navigate('/report');
+    } catch (error) {
+      console.error('Failed to grade assessment:', error);
+      setError('Unable to grade your assessment right now. Please try submitting again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -90,7 +94,7 @@ export default function AssessmentPage() {
           ) : (
             <>
               <div className="w-12 h-12 rounded-full border-4 border-violet-500/30 border-t-violet-400 animate-spin" />
-              <p className="text-slate-400">Preparing your assessment...</p>
+              <p className="text-slate-400">Prof. Nova is creating your customized quiz based on today's lesson...</p>
             </>
           )}
         </div>
@@ -109,7 +113,7 @@ export default function AssessmentPage() {
     );
   }
 
-  const q = questions[currentIdx];
+  const currentQuestion = questions[currentIdx];
   const progress = Math.round(((currentIdx + 1) / questions.length) * 100);
 
   return (
@@ -138,20 +142,24 @@ export default function AssessmentPage() {
         </div>
 
         {/* Question */}
-        <div className="glass-card p-8 animate-fade-in-up" key={currentIdx}>
+        <div className="glass-card p-8 animate-fade-in-up" key={currentQuestion.id}>
           <div className="flex items-center gap-2 mb-4">
             <HelpCircle className="w-5 h-5 text-violet-300" />
-            <span className="text-sm font-semibold text-violet-300">{q.type}</span>
-            <span className="text-xs text-slate-500">· {q.maxScore} points</span>
+            <span className="text-sm font-semibold text-violet-300">{currentQuestion.type}</span>
+            <span className="text-xs text-slate-500">· {currentQuestion.maxScore} points</span>
           </div>
-          <p className="text-white text-lg mb-6">{q.prompt}</p>
+          <p className="text-white text-lg mb-6">{currentQuestion.prompt}</p>
 
-          {q.options ? (
+          {currentQuestion.options ? (
             <div className="space-y-2">
-              {q.options.map((opt, i) => (
+              {currentQuestion.options.map((opt, i) => (
                 <button
                   key={opt.id}
-                  onClick={() => setSelectedOption(opt.label)}
+                  type="button"
+                  onClick={() => {
+                    setSelectedOption(opt.label);
+                    handleAnswer(opt.label);
+                  }}
                   className={`w-full p-3 rounded-xl border text-left transition-all flex items-center gap-3 ${
                     selectedOption === opt.label
                       ? 'border-violet-400/50 bg-violet-500/10'
@@ -170,7 +178,10 @@ export default function AssessmentPage() {
               className="input-field min-h-[100px] resize-none"
               placeholder="Type your answer..."
               value={textAnswer}
-              onChange={(e) => setTextAnswer(e.target.value)}
+              onChange={(e) => {
+                setTextAnswer(e.target.value);
+                handleAnswer(e.target.value);
+              }}
               autoFocus
             />
           )}

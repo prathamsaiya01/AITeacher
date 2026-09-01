@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { AssessmentResult, Lesson, ProgressEntry, SubjectType } from '@/models';
+import type { MaterialAnalysisResult } from '@/services/multimodalService';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -17,12 +18,24 @@ export interface StudentProgress {
   weakConcepts: string[];
   subjectDistribution: Partial<Record<SubjectType, number>>;
   streak: number;
+  scoreHistoryDates: string[];
+  scoreHistoryValues: number[];
 }
 
 export interface StudentMemoryContext {
   masteredConcepts: string[];
   strongConcepts: string[];
   weakConcepts: string[];
+}
+
+export interface UploadedMaterial {
+  id: string;
+  studentId: string;
+  filePath: string;
+  subject: string;
+  topic: string;
+  concepts: MaterialAnalysisResult['concepts'];
+  createdAt: string;
 }
 
 function requireSupabase() {
@@ -41,6 +54,8 @@ function emptyProgress(): StudentProgress {
     weakConcepts: [],
     subjectDistribution: {},
     streak: 0,
+    scoreHistoryDates: [],
+    scoreHistoryValues: [],
   };
 }
 
@@ -87,8 +102,12 @@ export async function saveAssessmentResult(
   assessmentResult: AssessmentResult & { strongConcepts?: string[]; weakConcepts?: string[] }
 ): Promise<void> {
   const client = requireSupabase();
-  const strongConcepts = assessmentResult.strongConcepts || assessmentResult.answers.filter((answer) => answer.isCorrect).map((answer) => answer.conceptId).filter(Boolean);
-  const weakConcepts = assessmentResult.weakConcepts || assessmentResult.answers.filter((answer) => !answer.isCorrect).map((answer) => answer.conceptId).filter(Boolean);
+  const strongConcepts = Array.from(new Set(
+    (assessmentResult.strongConcepts || assessmentResult.answers.filter((answer) => answer.isCorrect).map((answer) => answer.conceptId).filter(Boolean)) as string[]
+  ));
+  const weakConcepts = Array.from(new Set(
+    (assessmentResult.weakConcepts || assessmentResult.answers.filter((answer) => !answer.isCorrect).map((answer) => answer.conceptId).filter(Boolean)) as string[]
+  ));
   const { error } = await client.from('assessment_results').insert({
     student_id: studentId,
     lesson_id: assessmentResult.lessonId,
@@ -97,8 +116,74 @@ export async function saveAssessmentResult(
     percentage: assessmentResult.percentage,
     strong_concepts: strongConcepts,
     weak_concepts: weakConcepts,
+    created_at: new Date().toISOString(),
   });
   if (error) throw new Error(`Failed to save assessment result: ${error.message}`);
+}
+
+export async function saveUploadedMaterial(
+  studentId: string,
+  file: File,
+  analysis: MaterialAnalysisResult
+): Promise<void> {
+  if (!supabase) {
+    console.error('Uploaded material storage error: Supabase configuration is missing');
+    return;
+  }
+
+  try {
+    const fileName = `${studentId}/${Date.now()}_${file.name}`;
+    const { data: storageData, error: storageError } = await supabase.storage
+      .from('uploaded_materials')
+      .upload(fileName, file);
+
+    if (storageError) console.warn('Storage upload warn:', storageError);
+
+    const { error: dbError } = await supabase.from('uploaded_materials').insert({
+      student_id: studentId,
+      file_path: storageData?.path || fileName,
+      subject: analysis.subject,
+      topic: analysis.topic,
+      concepts: analysis.concepts,
+    });
+
+    if (dbError) console.error('Database insert error:', dbError);
+  } catch (error) {
+    console.error('Failed to save uploaded material:', error);
+  }
+}
+
+export async function getUploadedMaterials(studentId: string): Promise<UploadedMaterial[]> {
+  if (!supabase) {
+    console.error('Uploaded material history error: Supabase configuration is missing');
+    return [];
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('uploaded_materials')
+      .select('id, student_id, file_path, subject, topic, concepts, created_at')
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Failed to load uploaded materials:', error);
+      return [];
+    }
+
+    return (data || []).map((material) => ({
+      id: material.id,
+      studentId: material.student_id,
+      filePath: material.file_path,
+      subject: material.subject,
+      topic: material.topic,
+      concepts: material.concepts || [],
+      createdAt: material.created_at,
+    }));
+  } catch (error) {
+    console.error('Failed to load uploaded materials:', error);
+    return [];
+  }
 }
 
 export async function getStudentProgress(studentId: string): Promise<StudentProgress> {
@@ -124,11 +209,27 @@ export async function getStudentProgress(studentId: string): Promise<StudentProg
         conceptsMastered: new Set((result.strong_concepts || []).filter(Boolean)).size,
         learningMinutes: Number(lesson?.duration_minutes) || 0,
         subject: (lesson?.subject || 'General') as SubjectType,
+        lessonId: result.lesson_id,
+        lessonTitle: lesson?.title,
       };
     });
 
     const strongConcepts = [...new Set(assessmentRows.flatMap((result) => result.strong_concepts || []))];
     const weakConcepts = [...new Set(assessmentRows.flatMap((result) => result.weak_concepts || []))];
+
+    const orderedScores = assessmentRows
+      .map((result) => ({
+        date: result.created_at ? new Date(result.created_at).toISOString() : null,
+        score: Number(result.percentage) || 0,
+      }))
+      .filter((result) => result.date)
+      .sort((a, b) => new Date(a.date!).getTime() - new Date(b.date!).getTime());
+
+    const scoreHistoryDates = orderedScores.map(({ date }) =>
+      date ? new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+    );
+    const scoreHistoryValues = orderedScores.map(({ score }) => score);
+
     const subjectDistribution: Partial<Record<SubjectType, number>> = {};
     completedLessons.forEach((lesson) => {
       const subject = lesson.subject as SubjectType;
@@ -155,6 +256,8 @@ export async function getStudentProgress(studentId: string): Promise<StudentProg
       weakConcepts,
       subjectDistribution,
       streak,
+      scoreHistoryDates,
+      scoreHistoryValues,
     };
   } catch (error) {
     console.error('Failed to load student progress:', error);

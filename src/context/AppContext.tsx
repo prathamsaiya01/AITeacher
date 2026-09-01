@@ -45,16 +45,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshProgress = useCallback(async () => {
     if (!student) return;
-    const progress = await getStudentProgress(student.id);
-    setProgress(progress);
-    setProgressEntries(progress.entries);
+    const nextProgress = await getStudentProgress(student.id);
+    setProgress(nextProgress);
+    setProgressEntries(nextProgress.entries);
     setDashboardStats({
-      lessonsCompleted: progress.lessonsCompleted,
-      totalLearningMinutes: progress.totalLearningMinutes,
-      averageScore: progress.averageScore,
-      streak: progress.streak,
-      strongConcepts: progress.strongConcepts,
-      weakConcepts: progress.weakConcepts,
+      lessonsCompleted: nextProgress.lessonsCompleted,
+      totalLearningMinutes: nextProgress.totalLearningMinutes,
+      averageScore: nextProgress.averageScore,
+      streak: nextProgress.streak,
+      strongConcepts: nextProgress.strongConcepts,
+      weakConcepts: nextProgress.weakConcepts,
       recommendedLessons: [],
       continueLearning: null,
     });

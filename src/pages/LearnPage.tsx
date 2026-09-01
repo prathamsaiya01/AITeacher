@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { uploadDocument } from '@/services/aiService';
+import UploadModal from '@/components/UploadModal';
 import { Upload, FileText, Sparkles, X, File, ArrowRight, BookOpen, Type } from 'lucide-react';
 import type { UploadedDocument } from '@/models';
 
@@ -16,6 +17,7 @@ export default function LearnPage() {
   const [localDoc, setLocalDoc] = useState<UploadedDocument | null>(uploadedDoc);
   const [localTopic, setLocalTopic] = useState(topic);
   const [chapter, setChapter] = useState('');
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(async (file: File) => {
@@ -63,6 +65,10 @@ export default function LearnPage() {
           <p className="text-slate-400">
             Upload your material or enter a topic — your AI Teacher will build a personalized lesson.
           </p>
+          <button type="button" onClick={() => setIsUploadModalOpen(true)} className="btn-secondary mt-5 inline-flex items-center gap-2">
+            <Sparkles className="h-4 w-4" />
+            Upload & Learn
+          </button>
         </div>
 
         {/* Mode toggle */}
@@ -210,6 +216,7 @@ export default function LearnPage() {
           </p>
         )}
       </div>
+      <UploadModal isOpen={isUploadModalOpen} onClose={() => setIsUploadModalOpen(false)} />
     </div>
   );
 }

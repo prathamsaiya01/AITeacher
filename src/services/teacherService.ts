@@ -295,10 +295,9 @@ export async function continueTeachingTurn(
     const currentUserInput = submittedMessage
       || "The learner clicked Continue without a written answer. Give a short Socratic bridge and ask one focused question about the current concept.";
 
-    // Local Ollama is the primary provider. Its output uses the same structured
-    // visual contract as Gemini, so the classroom receives one universal shape.
+    // Attempt the local Ollama teacher first for low-latency Socratic turns.
     try {
-      const ollamaResponse = await queryOllamaTeacher(currentUserInput, systemPrompt);
+      const ollamaResponse = await queryOllamaTeacher(userMessage || currentUserInput, systemPrompt);
       const teacherMessage = ollamaResponse.teacherMessage?.trim() || SOCRATIC_OPENING_FALLBACK;
       const suggestedVisual = normalizeSuggestedVisual(ollamaResponse.suggestedVisual, lesson.subject);
       return {
@@ -309,8 +308,9 @@ export async function continueTeachingTurn(
         nextAction: 'ask_question',
         confidence: 0.5,
       };
-    } catch {
-      console.log("Ollama offline, falling back to Gemini SDK");
+    } catch (error) {
+      console.log('Ollama offline, using Gemini fallback');
+      console.warn('Ollama teacher request failed:', error);
     }
 
     if (!apiKey) {

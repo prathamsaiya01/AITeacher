@@ -3,10 +3,50 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { generateLearningReport } from '@/services/aiService';
 import {
-  Trophy, CheckCircle2, AlertCircle, TrendingUp, TrendingDown, BookOpen,
-  ArrowRight, RotateCcw, Sparkles, Target, Lightbulb, Brain,
+  Trophy,
+  CheckCircle2,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  ArrowRight,
+  RotateCcw,
+  Sparkles,
+  Target,
+  Brain,
+  BookOpen,
+  ChevronRight,
 } from 'lucide-react';
 import type { LearningReport } from '@/models';
+
+function ScoreRing({ score }: { score: number }) {
+  const radius = 54;
+  const circumference = 2 * Math.PI * radius;
+  const progress = Math.max(0, Math.min(100, score));
+  const dashOffset = circumference - (progress / 100) * circumference;
+
+  return (
+    <div className="relative h-32 w-32">
+      <svg className="h-32 w-32 -rotate-90" viewBox="0 0 140 140" aria-label={`Score ${score}%`}>
+        <circle cx="70" cy="70" r={radius} stroke="rgba(148, 163, 184, 0.18)" strokeWidth="12" fill="transparent" />
+        <circle
+          cx="70"
+          cy="70"
+          r={radius}
+          stroke={progress >= 80 ? '#34d399' : progress >= 60 ? '#fbbf24' : '#f87171'}
+          strokeWidth="12"
+          fill="transparent"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={dashOffset}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-3xl font-display font-bold text-white">{score}</span>
+        <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Score</span>
+      </div>
+    </div>
+  );
+}
 
 export default function ReportPage() {
   const navigate = useNavigate();
@@ -20,140 +60,222 @@ export default function ReportPage() {
       navigate('/learn');
       return;
     }
+
     let cancelled = false;
+
     const run = async () => {
       try {
-        const r = await generateLearningReport(lesson, assessmentResult);
+        const generated = await generateLearningReport(lesson, assessmentResult);
+        if (cancelled) return;
+
+        setReport(generated);
+        setLearningReport(generated);
+        await refreshData();
+      } catch (err) {
+        console.error('Failed to generate learning report:', err);
         if (!cancelled) {
-          setReport(r);
-          setLearningReport(r);
-          refreshData();
+          setError('Unable to generate your learning report right now. Please try again.');
         }
-      } catch (error) {
-        console.error('Failed to generate learning report:', error);
-        if (!cancelled) setError('Unable to generate your learning report. Please try again.');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
-    run();
-    return () => { cancelled = true; };
-  }, [lesson, assessmentResult, navigate, setLearningReport, refreshData]);
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [assessmentResult, lesson, navigate, refreshData, setLearningReport]);
 
   if (loading || !report || !lesson) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          {error ? (
-            <>
-              <p role="alert" className="text-center text-error-300">{error}</p>
-              <button onClick={() => navigate('/assessment')} className="btn-secondary">Back to Assessment</button>
-            </>
-          ) : (
-            <>
-              <div className="w-12 h-12 rounded-full border-4 border-violet-500/30 border-t-violet-400 animate-spin" />
-              <p className="text-slate-400">Generating your learning report...</p>
-            </>
-          )}
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="glass-card max-w-md w-full p-8 text-center">
+          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full border border-violet-400/20 bg-violet-500/10">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-violet-500/30 border-t-violet-400" />
+          </div>
+          <p className="text-lg font-semibold text-white">Prof. Nova is analyzing your quiz results…</p>
+          <p className="mt-2 text-sm text-slate-400">Gemini is reviewing your performance and preparing a personalized learning report.</p>
         </div>
       </div>
     );
   }
 
-  const scoreColor = report.score >= 80 ? 'text-success-400' : report.score >= 60 ? 'text-warning-400' : 'text-error-400';
-  const scoreBg = report.score >= 80 ? 'from-success-500/20 to-success-500/5' : report.score >= 60 ? 'from-warning-500/20 to-warning-500/5' : 'from-error-500/20 to-error-500/5';
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="glass-card max-w-md w-full p-8 text-center">
+          <p role="alert" className="text-center text-error-300">{error}</p>
+          <button onClick={() => navigate('/assessment')} className="btn-secondary mt-6">Back to Assessment</button>
+        </div>
+      </div>
+    );
+  }
+
+  const score = report.score;
+  const scoreTone = score >= 80 ? 'text-success-400' : score >= 60 ? 'text-warning-400' : 'text-error-400';
 
   return (
     <div className="min-h-screen px-4 py-12">
-      <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-violet-600/15 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-72 h-72 bg-cyan-500/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="max-w-4xl mx-auto relative z-10">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass mb-4">
-            <Trophy className="w-4 h-4 text-warning-400" />
-            <span className="text-sm text-slate-300">Learning Report</span>
+      <div className="absolute left-1/4 top-1/4 h-72 w-72 rounded-full bg-violet-600/15 blur-[120px]" />
+      <div className="absolute bottom-1/4 right-1/4 h-72 w-72 rounded-full bg-cyan-500/10 blur-[120px]" />
+
+      <div className="relative z-10 mx-auto max-w-5xl">
+        <div className="mb-8 text-center">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-slate-300">
+            <Trophy className="h-4 w-4 text-warning-400" />
+            Learning Report
           </div>
-          <h1 className="font-display text-3xl sm:text-4xl font-bold text-white mb-2">{lesson.title}</h1>
-          <p className="text-slate-400">{report.summary}</p>
+          <h1 className="font-display text-3xl font-bold text-white sm:text-4xl">{lesson.title}</h1>
+          <p className="mt-3 text-slate-400">{report.summary}</p>
         </div>
 
-        {/* Score */}
-        <div className={`glass-card p-8 mb-6 bg-gradient-to-br ${scoreBg}`}>
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              <div className="text-sm text-slate-400 mb-1">Your Score</div>
-              <div className={`text-6xl font-display font-bold ${scoreColor}`}>{report.score}%</div>
-            </div>
-            <div className="flex items-center gap-6">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-success-400">{report.strongAreas.length}</div>
-                <div className="text-xs text-slate-400">Strong</div>
+        <div className="glass-card mb-6 p-6 sm:p-8">
+          <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
+            <div className="flex items-center gap-5">
+              <ScoreRing score={score} />
+              <div>
+                <div className="text-sm uppercase tracking-[0.2em] text-slate-400">Overall Score</div>
+                <div className={`mt-2 text-5xl font-display font-bold ${scoreTone}`}>{score}%</div>
               </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-error-400">{report.weakAreas.length}</div>
-                <div className="text-xs text-slate-400">Needs Work</div>
+            </div>
+
+            <div className="grid w-full max-w-md grid-cols-3 gap-3">
+              <div className="rounded-2xl border border-white/5 bg-success-500/10 p-4 text-center">
+                <div className="text-2xl font-bold text-success-300">{report.strongAreas.length}</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Strong</div>
+              </div>
+              <div className="rounded-2xl border border-white/5 bg-warning-500/10 p-4 text-center">
+                <div className="text-2xl font-bold text-warning-300">{report.weakAreas.length}</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Weak</div>
+              </div>
+              <div className="rounded-2xl border border-white/5 bg-violet-500/10 p-4 text-center">
+                <div className="text-2xl font-bold text-violet-300">{report.misconceptions.length}</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Clarified</div>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          {/* Strong areas */}
+        <div className="mb-6 grid gap-4 md:grid-cols-2">
           <div className="glass-card p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <TrendingUp className="w-5 h-5 text-success-400" />
-              <h3 className="font-semibold text-white">Strong Areas</h3>
+            <div className="mb-4 flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-success-400" />
+              <h2 className="text-lg font-semibold text-white">Strong Concepts</h2>
             </div>
-            {report.strongAreas.length > 0 ? (
-              <div className="space-y-2">
-                {report.strongAreas.map((a) => (
-                  <div key={a} className="flex items-center gap-2 p-2 rounded-lg bg-success-500/10">
-                    <CheckCircle2 className="w-4 h-4 text-success-400 flex-shrink-0" />
-                    <span className="text-sm text-slate-200">{a}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">Keep practicing to build strength!</p>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {report.strongAreas.length > 0 ? (
+                report.strongAreas.map((concept) => (
+                  <span key={concept} className="rounded-full border border-success-400/30 bg-success-500/10 px-3 py-1.5 text-sm text-success-200">
+                    {concept}
+                  </span>
+                ))
+              ) : (
+                <span className="text-sm text-slate-400">No strong concepts detected yet. Keep learning and revisit the lesson.</span>
+              )}
+            </div>
           </div>
 
-          {/* Weak areas */}
           <div className="glass-card p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <TrendingDown className="w-5 h-5 text-error-400" />
-              <h3 className="font-semibold text-white">Needs Work</h3>
+            <div className="mb-4 flex items-center gap-2">
+              <TrendingDown className="h-5 w-5 text-error-400" />
+              <h2 className="text-lg font-semibold text-white">Weak Concepts</h2>
             </div>
-            {report.weakAreas.length > 0 ? (
-              <div className="space-y-2">
-                {report.weakAreas.map((a) => (
-                  <div key={a} className="flex items-center gap-2 p-2 rounded-lg bg-error-500/10">
-                    <AlertCircle className="w-4 h-4 text-error-400 flex-shrink-0" />
-                    <span className="text-sm text-slate-200">{a}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-success-400">No weak areas detected!</p>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {report.weakAreas.length > 0 ? (
+                report.weakAreas.map((concept) => (
+                  <span key={concept} className="rounded-full border border-error-400/30 bg-error-500/10 px-3 py-1.5 text-sm text-error-200">
+                    {concept}
+                  </span>
+                ))
+              ) : (
+                <span className="text-sm text-slate-400">Great work — no major gaps identified.</span>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Misconceptions */}
-        {report.misconceptions.length > 0 && (
-          <div className="glass-card p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Brain className="w-5 h-5 text-violet-300" />
-              <h3 className="font-semibold text-white">Misconceptions Detected</h3>
+        <div className="mb-6 grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+          <div className="glass-card p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-warning-400" />
+              <h2 className="text-lg font-semibold text-white">AI Revision Strategies</h2>
             </div>
+
             <div className="space-y-3">
-              {report.misconceptions.map((m) => (
-                <div key={m.id} className="p-4 rounded-xl bg-ink-900/40 border border-white/5">
-                  <div className="font-medium text-violet-300 mb-1">{m.conceptName}</div>
-                  <p className="text-sm text-slate-400 mb-2">{m.description}</p>
-                  <div className="text-sm text-slate-300">
-                    <span className="text-cyan-300 font-medium">Fix: </span>
-                    {m.alternativeExplanation}
+              {report.recommendedRevision.length > 0 ? (
+                report.recommendedRevision.map((item, index) => (
+                  <div key={`${item}-${index}`} className="rounded-xl border border-white/5 bg-ink-900/30 p-3 text-sm text-slate-300">
+                    <div className="mb-1 flex items-center gap-2 text-warning-300">
+                      <Sparkles className="h-4 w-4" />
+                      Suggested revision
+                    </div>
+                    {item}
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-white/5 bg-ink-900/30 p-3 text-sm text-slate-400">
+                  Review the lesson concept map and retake a quick concept check to reinforce the idea.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="glass-card p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <Target className="h-5 w-5 text-violet-300" />
+              <h2 className="text-lg font-semibold text-white">Next Topic</h2>
+            </div>
+
+            <div className="rounded-2xl border border-violet-400/20 bg-violet-500/10 p-4">
+              <div className="mb-2 flex items-center gap-2 text-violet-200">
+                <BookOpen className="h-4 w-4" />
+                Recommended next lesson
+              </div>
+              <div className="text-xl font-semibold text-white">{report.suggestedNextTopic}</div>
+              <p className="mt-2 text-sm text-slate-300">
+                Focus on this topic next to reinforce the concepts that need extra practice before your next quiz.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {report.misconceptions.length > 0 && (
+          <div className="glass-card mb-6 p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <Brain className="h-5 w-5 text-violet-300" />
+              <h2 className="text-lg font-semibold text-white">Misconception Clarification</h2>
+            </div>
+
+            <div className="space-y-4">
+              {report.misconceptions.map((item) => (
+                <div key={item.id} className="rounded-2xl border border-white/5 bg-ink-900/30 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div className="font-semibold text-violet-200">{item.conceptName}</div>
+                    <span className="rounded-full border border-warning-400/25 bg-warning-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-warning-200">
+                      Missed concept
+                    </span>
+                  </div>
+
+                  <p className="mb-3 text-sm text-slate-300">
+                    <span className="font-medium text-white">What went wrong:</span> {item.description}
+                  </p>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                      <div className="mb-1 text-xs uppercase tracking-[0.2em] text-cyan-300">Clear explanation</div>
+                      <p className="text-sm text-slate-300">{item.alternativeExplanation}</p>
+                    </div>
+                    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                      <div className="mb-1 text-xs uppercase tracking-[0.2em] text-cyan-300">Quick analogy</div>
+                      <p className="text-sm text-slate-300">{item.analogy}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-success-400/20 bg-success-500/5 p-3 text-sm text-slate-200">
+                    <span className="font-medium text-success-300">Simpler example:</span> {item.simplerExample}
                   </div>
                 </div>
               ))}
@@ -161,49 +283,14 @@ export default function ReportPage() {
           </div>
         )}
 
-        {/* Recommendations */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div className="glass-card p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <RotateCcw className="w-5 h-5 text-warning-400" />
-              <h3 className="font-semibold text-white">Recommended Revision</h3>
-            </div>
-            <div className="space-y-2">
-              {report.recommendedRevision.map((r, i) => (
-                <div key={i} className="flex items-start gap-2 text-sm text-slate-300">
-                  <span className="text-warning-400 mt-0.5">•</span>
-                  {r}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="glass-card p-6 bg-gradient-to-br from-violet-500/10 to-cyan-500/5">
-            <div className="flex items-center gap-2 mb-4">
-              <Target className="w-5 h-5 text-violet-300" />
-              <h3 className="font-semibold text-white">Suggested Next Topic</h3>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-violet-500/20 flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-violet-300" />
-              </div>
-              <div>
-                <div className="font-semibold text-white">{report.suggestedNextTopic}</div>
-                <div className="text-xs text-slate-400">Recommended by AI</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <button onClick={() => navigate('/learn')} className="btn-secondary flex items-center gap-2">
-            <RotateCcw className="w-4 h-4" />
-            Learn Again
+        <div className="flex flex-col items-center justify-center gap-4 pt-2 sm:flex-row">
+          <button onClick={() => navigate('/classroom')} className="btn-secondary flex items-center gap-2">
+            <RotateCcw className="h-4 w-4" />
+            Back to Classroom
           </button>
-          <button onClick={() => navigate('/dashboard')} className="btn-primary flex items-center gap-2">
-            Go to Dashboard
-            <ArrowRight className="w-4 h-4" />
+          <button onClick={() => navigate('/progress')} className="btn-primary flex items-center gap-2">
+            View Full Progress
+            <ChevronRight className="h-4 w-4" />
           </button>
         </div>
       </div>

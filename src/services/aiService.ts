@@ -22,7 +22,7 @@ import type {
 } from '@/models';
 import { processDocument } from './documentService';
 import { storeDocumentInSupabase } from './ragService';
-import { getStudentMemoryContext } from './studentService';
+import { getStudentMemoryContext, getStudentProgress } from './studentService';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 if (!apiKey) console.warn('VITE_GEMINI_API_KEY is missing from environment variables.');
@@ -490,17 +490,19 @@ function buildFallbackLearningReport(lesson: Lesson, result: AssessmentResult): 
 
 // ---------- Learning path ----------
 export async function generateLearningPath(student: Student): Promise<LearningPath> {
-  await delay(800);
-  const nodes = [
-    { id: 'n1', title: 'Python Fundamentals', description: 'Variables, loops, functions', subject: 'Programming' as SubjectType, status: 'completed' as const, order: 1, estimatedMinutes: 60, prerequisites: [] as string[] },
-    { id: 'n2', title: 'Math for ML', description: 'Linear algebra & calculus basics', subject: 'Mathematics' as SubjectType, status: 'completed' as const, order: 2, estimatedMinutes: 90, prerequisites: ['n1'] },
-    { id: 'n3', title: 'Data Processing', description: 'Pandas, NumPy, data cleaning', subject: 'Programming' as SubjectType, status: 'current' as const, order: 3, estimatedMinutes: 75, prerequisites: ['n1', 'n2'], recommended: true },
-    { id: 'n4', title: 'Supervised Learning', description: 'Regression & classification', subject: 'General' as SubjectType, status: 'available' as const, order: 4, estimatedMinutes: 120, prerequisites: ['n3'] },
-    { id: 'n5', title: 'Unsupervised Learning', description: 'Clustering & dimensionality reduction', subject: 'General' as SubjectType, status: 'available' as const, order: 5, estimatedMinutes: 100, prerequisites: ['n4'] },
-    { id: 'n6', title: 'Model Evaluation', description: 'Metrics, validation, overfitting', subject: 'Mathematics' as SubjectType, status: 'locked' as const, order: 6, estimatedMinutes: 80, prerequisites: ['n4', 'n5'] },
-    { id: 'n7', title: 'Neural Networks', description: 'Deep learning foundations', subject: 'General' as SubjectType, status: 'locked' as const, order: 7, estimatedMinutes: 150, prerequisites: ['n6'] },
-  ];
-  return { id: uid('path'), title: 'Machine Learning Path', studentId: student.id, nodes };
+  const progress = await getStudentProgress(student.id);
+  const nodes = progress.entries.map((entry, index) => ({
+    id: entry.lessonId || `completed-session-${index + 1}`,
+    title: entry.lessonTitle || `${entry.subject} lesson`,
+    description: `Completed assessment with a ${entry.score}% score`,
+    subject: entry.subject,
+    status: 'completed' as const,
+    order: index + 1,
+    estimatedMinutes: entry.learningMinutes,
+    prerequisites: [] as string[],
+  }));
+
+  return { id: uid('path'), title: `${student.name}'s Learning Path`, studentId: student.id, nodes };
 }
 
 // ---------- Document upload (Phase 2 - Real implementation) ----------

@@ -147,6 +147,8 @@ export interface ProgressEntry {
   conceptsMastered: number;
   learningMinutes: number;
   subject: SubjectType;
+  lessonId?: string;
+  lessonTitle?: string;
 }
 
 export interface LearningPathNode {

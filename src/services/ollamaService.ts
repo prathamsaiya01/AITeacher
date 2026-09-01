@@ -11,14 +11,14 @@ export interface OllamaTeacherResponse {
 }
 
 const OLLAMA_ENDPOINT = 'http://localhost:11434/api/generate';
-const DEFAULT_MODEL = 'deepseek-r1:8b'; // Or 'llama3.2'
+const FAST_MODEL = 'qwen2.5:1.5b';
 
 export async function queryOllamaTeacher(
   prompt: string,
   systemInstruction: string,
-  model = DEFAULT_MODEL
+  model = FAST_MODEL
 ): Promise<OllamaTeacherResponse> {
-  const fullPrompt = `${systemInstruction}\n\nIMPORTANT: Respond ONLY with valid JSON in this exact structure, with no extra text or markdown formatting:\n{\n  "teacherMessage": "Your Socratic explanation and follow-up question here",\n  "suggestedVisual": {\n    "type": "flowchart",\n    "title": "Visual Title",\n    "content": "Step 1 -> Step 2 -> Step 3",\n    "explanation": "Brief explanation"\n  }\n}\n\nStudent Prompt: ${prompt}`;
+  const fullPrompt = `${systemInstruction}\n\nReturn JSON only:\n{\n  "teacherMessage": "Explanation and follow-up question",\n  "suggestedVisual": { "type": "flowchart", "title": "Title", "content": "Step 1 -> Step 2", "explanation": "Brief description" }\n}\n\nStudent: ${prompt}`;
 
   try {
     const response = await fetch(OLLAMA_ENDPOINT, {
@@ -30,7 +30,12 @@ export async function queryOllamaTeacher(
         model,
         prompt: fullPrompt,
         stream: false,
-        format: 'json', // Forces Ollama to output strict JSON
+        format: 'json',
+        options: {
+          num_predict: 250,
+          temperature: 0.4,
+          top_k: 20,
+        },
       }),
     });
 
@@ -42,11 +47,11 @@ export async function queryOllamaTeacher(
     const parsed: OllamaTeacherResponse = JSON.parse(data.response);
 
     return {
-      teacherMessage: parsed.teacherMessage || "Let's explore this step by step. What are your initial thoughts?",
+      teacherMessage: parsed.teacherMessage || "Let's explore this together. What are your initial thoughts?",
       suggestedVisual: parsed.suggestedVisual,
     };
   } catch (error) {
-    console.warn('Ollama Service Unavailable or Error:', error);
-    throw error; // Rethrow to allow fallback to Gemini in teacherService.ts
+    console.warn('Ollama slow or offline, falling back to Gemini:', error);
+    throw error;
   }
 }
