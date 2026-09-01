@@ -4,6 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { generateQuestion, evaluateAnswer } from '@/services/aiService';
 import { continueTeachingTurn } from '@/services/teacherService';
 import { retrieveRelevantContext } from '@/services/ragService';
+import { saveCompletedLesson } from '@/services/studentService';
 import { cancelSpeech, speak, startListening, stopListening } from '@/services/voiceService';
 import { avatarService, initializeAvatarSession, setAvatarTalking, stopAvatarSession, streamAvatarVideo } from '@/services/avatarService';
 import type { AvatarSession } from '@/services/avatarService';
@@ -536,6 +537,29 @@ export default function ClassroomPage() {
     executeContinueLessonTurn(undefined, true);
   }, [lesson, segmentIndex, navigate, setLesson, executeContinueLessonTurn, applyUnderstandingDelta]);
 
+  const handleSkipExplanation = useCallback(() => {
+    const prompt = 'I already understand the theory. Skip the explanation and give me a practical exercise or question to test my understanding directly.';
+    if (isThinking || isSubmittingTurn || !lesson || !student) return;
+    addStudentMessage(prompt);
+    void executeContinueLessonTurn(prompt);
+  }, [addStudentMessage, executeContinueLessonTurn, isSubmittingTurn, isThinking, lesson, student]);
+
+  const handleTestYourself = useCallback(async () => {
+    if (!lesson || !student || isThinking || isSubmittingTurn) return;
+
+    setIsSubmittingTurn(true);
+    setGreetingError(null);
+    try {
+      await saveCompletedLesson(student.id, { ...lesson, status: 'in-progress' });
+      navigate('/assessment');
+    } catch (error) {
+      console.error('Failed to save active lesson before assessment:', error);
+      setGreetingError('We could not save this lesson before opening the assessment. Please try again.');
+    } finally {
+      setIsSubmittingTurn(false);
+    }
+  }, [isSubmittingTurn, isThinking, lesson, navigate, student]);
+
   const handleSubmitAnswer = async () => {
     if (!currentQuestion) return;
     const response = selectedOption || answerInput.trim();
@@ -666,11 +690,27 @@ export default function ClassroomPage() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             <div className="text-sm text-slate-400 flex items-center gap-1">
               <BookOpen className="w-4 h-4" />
-              {lesson.title}
+              <span className="hidden sm:inline">{lesson.title}</span>
             </div>
+            <button
+              type="button"
+              onClick={handleSkipExplanation}
+              disabled={isThinking || isSubmittingTurn}
+              className="rounded-xl border border-white/10 bg-ink-900/50 px-3 py-2 text-xs font-semibold text-slate-300 transition-colors hover:border-violet-400/40 hover:bg-violet-500/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ⏩ <span className="hidden sm:inline">Skip Explanation</span><span className="sm:hidden">Skip</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleTestYourself()}
+              disabled={isThinking || isSubmittingTurn}
+              className="rounded-xl border border-white/10 bg-ink-900/50 px-3 py-2 text-xs font-semibold text-slate-300 transition-colors hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              📝 <span className="hidden sm:inline">Test Yourself</span><span className="sm:hidden">Test</span>
+            </button>
             <button onClick={handleMicInput} aria-label="Use microphone" className={`p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white ${isListening ? 'text-error-400 animate-pulse' : ''}`}>
               {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
             </button>

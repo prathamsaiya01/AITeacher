@@ -132,6 +132,11 @@ function subjectVisualInstruction(subject: SubjectType): string {
   }
 }
 
+function isAcceleratedPracticePrompt(message?: string): boolean {
+  const normalized = message?.toLowerCase().replace(/[\u2019']/g, "'").trim() || '';
+  return /skip(?: the)? explanation|skip theory|already understand(?: the)? theory|direct exercise|practical (?:exercise|question|challenge)|test my understanding|hands-on|practice mode/.test(normalized);
+}
+
 /**
  * Build system prompt for Socratic teaching methodology
  */
@@ -140,7 +145,8 @@ function buildSystemPrompt(
   lesson: Lesson,
   currentConcept: Concept,
   retrievedContext?: string[],
-  preferredLanguage: Language = student.language
+  preferredLanguage: Language = student.language,
+  acceleratedPractice = false
 ): string {
   const languageMap: Record<Language, string> = {
     English: 'English',
@@ -163,6 +169,16 @@ function buildSystemPrompt(
 
   const contextStr = retrievedContext && retrievedContext.length > 0
     ? `\nRelevant document context:\n${retrievedContext.map((ctx, i) => `${i + 1}. ${ctx}`).join('\n')}`
+    : '';
+  const practiceModeInstruction = acceleratedPractice
+    ? `
+## Accelerated Practice Mode
+The learner explicitly asked to skip theory. Do not provide an introduction, recap, encouragement, or definition.
+Start immediately with one real-world application question or hands-on challenge based on the lesson topic "${lesson.topic}" and current concept "${currentConcept.name}".
+Give clear, concise instructions for what the learner must produce or calculate. Ask the learner to answer before revealing a solution.
+Return a corresponding suggestedVisual: an equation breakdown for quantitative work, a code template for programming, or a diagram/flowchart for systems and processes. Make it specific to this topic, never generic.
+Set nextAction to "ask_question".
+Keep teacherMessage to 1-3 short sentences with no fluff.`
     : '';
 
   return `You are an expert Socratic AI Teacher. Your role is to guide students to deeper understanding through structured questioning, not by simply providing answers.
@@ -225,6 +241,7 @@ If you detect a misconception:
 
 ## Document Context
 ${contextStr || 'No additional document context provided.'}
+${practiceModeInstruction}
 
 ## Output Format
 Respond ALWAYS with a valid JSON object matching this structure:
@@ -279,7 +296,8 @@ export async function continueTeachingTurn(
     const activeLanguage = resolveLanguage(student, language, userMessage);
 
     // Build the system prompt with pedagogical context
-    const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage);
+    const acceleratedPractice = isAcceleratedPracticePrompt(userMessage);
+    const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage, acceleratedPractice);
 
     // Build conversation history for context
     const safeChatHistory = Array.isArray(chatHistory) ? chatHistory : [];
@@ -346,7 +364,7 @@ export async function continueTeachingTurn(
           suggestedVisual,
           text: teacherMessage,
           visual: suggestedVisual,
-          nextAction: jsonData.nextAction || 'explain',
+          nextAction: acceleratedPractice ? 'ask_question' : (jsonData.nextAction || 'explain'),
           confidence: jsonData.confidence !== undefined ? jsonData.confidence : 0.5,
           misconceptionDetected: jsonData.misconceptionDetected || undefined,
         };

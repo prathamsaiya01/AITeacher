@@ -18,7 +18,7 @@ export async function queryOllamaTeacher(
   systemInstruction: string,
   model = FAST_MODEL
 ): Promise<OllamaTeacherResponse> {
-  const fullPrompt = `${systemInstruction}\n\nReturn JSON only:\n{\n  "teacherMessage": "Explanation and follow-up question",\n  "suggestedVisual": { "type": "flowchart", "title": "Title", "content": "Step 1 -> Step 2", "explanation": "Brief description" }\n}\n\nStudent: ${prompt}`;
+  const fullPrompt = `${systemInstruction}\n\nReturn JSON only:\n{\n  "teacherMessage": "Concise teacher response and focused question",\n  "suggestedVisual": { "type": "flowchart", "title": "Title", "content": "Step 1 -> Step 2", "explanation": "Brief description" }\n}\n\nStudent: ${prompt}`;
 
   try {
     const response = await fetch(OLLAMA_ENDPOINT, {
