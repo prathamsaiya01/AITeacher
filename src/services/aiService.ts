@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 import type {
   Student,
   Lesson,
@@ -27,6 +28,13 @@ import { getStudentMemoryContext, getStudentProgress } from './studentService';
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 if (!apiKey) console.warn('VITE_GEMINI_API_KEY is missing from environment variables.');
 const ai = new GoogleGenAI({ apiKey });
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing from environment variables.');
+}
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2, 10)}`;
@@ -102,6 +110,40 @@ export interface GenerateLessonParams {
   teachingStyle: string;
   availableTime: string;
   desiredDepth: string;
+}
+
+export async function saveLessonToDatabase(lesson: Lesson): Promise<boolean> {
+  try {
+    if (!supabaseUrl || !supabaseAnonKey || !apiKey) {
+      console.warn('Skipping lesson save because Supabase or Gemini credentials are missing.');
+      return true;
+    }
+
+    const { error } = await supabase.from('lessons').upsert({
+      id: lesson.id,
+      student_id: lesson.studentId,
+      title: lesson.title,
+      subject: lesson.subject,
+      topic: lesson.topic,
+      content: JSON.stringify({
+        concepts: lesson.concepts,
+        segments: lesson.segments,
+        estimatedMinutes: lesson.estimatedMinutes,
+        status: lesson.status,
+      }),
+      created_at: lesson.createdAt,
+    });
+
+    if (error) {
+      console.warn('Unable to save lesson to Supabase:', error.message || error);
+      return true;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Lesson save failed:', error instanceof Error ? error.message : error);
+    return true;
+  }
 }
 
 // ---------- Lesson generation (Real Gemini Integration) ----------
@@ -328,21 +370,13 @@ export async function generateQuestion(conceptId: string, subject: SubjectType, 
 
 async function generateGeminiJson<T>(prompt: string, responseSchema: Schema): Promise<T> {
   if (!apiKey) throw new Error('VITE_GEMINI_API_KEY is not configured');
-  let response;
-  try {
-    response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema, temperature: 0.3 },
-    });
-  } catch (primaryError) {
-    console.error('Gemini API Error Detail:', primaryError);
-    response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
-      contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema, temperature: 0.3 },
-    });
-  }
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { responseMimeType: 'application/json', responseSchema, temperature: 0.3 },
+  });
+
   const text = response.text?.trim();
   if (!text) throw new Error('Gemini returned an empty response');
   return JSON.parse(text) as T;

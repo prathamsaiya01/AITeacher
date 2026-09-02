@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
-import { generateQuestion, evaluateAnswer } from '@/services/aiService';
+import { generateQuestion, evaluateAnswer, saveLessonToDatabase } from '@/services/aiService';
 import { continueTeachingTurn } from '@/services/teacherService';
 import { retrieveRelevantContext } from '@/services/ragService';
-import { saveCompletedLesson } from '@/services/studentService';
 import { cancelSpeech, speak, startListening, stopListening } from '@/services/voiceService';
 import { avatarService, initializeAvatarSession, setAvatarTalking, stopAvatarSession, streamAvatarVideo } from '@/services/avatarService';
 import type { AvatarSession } from '@/services/avatarService';
@@ -12,7 +11,7 @@ import type { SuggestedVisual } from '@/services/teacherService';
 import {
   Brain, Volume2, VolumeX, Mic, MicOff, Send, CheckCircle2, XCircle, Lightbulb, TrendingUp,
   Clock, BookOpen, HelpCircle, Eye, Code, Calculator, FlaskConical, Scroll, Zap,
-  ChevronRight, RotateCcw, Sparkles, MessageSquare, Copy,
+  ChevronRight, RotateCcw, Sparkles, MessageSquare, Copy, Loader2,
 } from 'lucide-react';
 import type { Question, Evaluation, SubjectType, ChatMessage } from '@/models';
 
@@ -216,6 +215,7 @@ export default function ClassroomPage() {
   const [isThinking, setIsThinking] = useState(false);
   const [currentVisual, setCurrentVisual] = useState<SuggestedVisual | undefined>(undefined);
   const [isSubmittingTurn, setIsSubmittingTurn] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [retrievedContext, setRetrievedContext] = useState<string[]>([]);
   const [greetingError, setGreetingError] = useState<string | null>(null);
   const [visualTab, setVisualTab] = useState<'visuals' | 'notes' | 'code'>('visuals');
@@ -545,20 +545,22 @@ export default function ClassroomPage() {
   }, [addStudentMessage, executeContinueLessonTurn, isSubmittingTurn, isThinking, lesson, student]);
 
   const handleTestYourself = useCallback(async () => {
-    if (!lesson || !student || isThinking || isSubmittingTurn) return;
+    if (!lesson || !student || isThinking || isSubmittingTurn || isSaving) return;
 
-    setIsSubmittingTurn(true);
+    setIsSaving(true);
     setGreetingError(null);
+
     try {
-      await saveCompletedLesson(student.id, { ...lesson, status: 'in-progress' });
-      navigate('/assessment');
+      await saveLessonToDatabase(lesson);
+      setLesson(lesson);
     } catch (error) {
       console.error('Failed to save active lesson before assessment:', error);
-      setGreetingError('We could not save this lesson before opening the assessment. Please try again.');
+      setLesson(lesson);
     } finally {
-      setIsSubmittingTurn(false);
+      navigate('/assessment');
+      setIsSaving(false);
     }
-  }, [isSubmittingTurn, isThinking, lesson, navigate, student]);
+  }, [isSaving, isSubmittingTurn, isThinking, lesson, navigate, setLesson, student]);
 
   const handleSubmitAnswer = async () => {
     if (!currentQuestion) return;
@@ -706,10 +708,20 @@ export default function ClassroomPage() {
             <button
               type="button"
               onClick={() => void handleTestYourself()}
-              disabled={isThinking || isSubmittingTurn}
+              disabled={isThinking || isSubmittingTurn || isSaving}
               className="rounded-xl border border-white/10 bg-ink-900/50 px-3 py-2 text-xs font-semibold text-slate-300 transition-colors hover:border-cyan-400/40 hover:bg-cyan-500/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
             >
-              📝 <span className="hidden sm:inline">Test Yourself</span><span className="sm:hidden">Test</span>
+              {isSaving ? (
+                <>
+                  <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
+                  <span className="hidden sm:inline">Saving...</span>
+                  <span className="sm:hidden">Saving</span>
+                </>
+              ) : (
+                <>
+                  📝 <span className="hidden sm:inline">Test Yourself</span><span className="sm:hidden">Test</span>
+                </>
+              )}
             </button>
             <button onClick={handleMicInput} aria-label="Use microphone" className={`p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-white ${isListening ? 'text-error-400 animate-pulse' : ''}`}>
               {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
