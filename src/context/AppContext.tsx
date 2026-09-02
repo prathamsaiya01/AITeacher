@@ -83,13 +83,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
 
       const currentTopic = topic || params?.topic || 'General Science';
+      const requestedTime = params?.availableTime ?? `${activeStudent.availableTime} ${activeStudent.availableTime === 1 || activeStudent.availableTime === 3 || activeStudent.availableTime === 7 ? 'days' : 'minutes'}`;
       setIsLoading(true);
       try {
         const generatedLesson = await generateGeminiLesson(
           activeStudent,
           currentTopic,
           uploadedDoc || undefined,
-          params
+          { ...params, availableTime: requestedTime }
         );
         setLesson(generatedLesson);
         return generatedLesson;

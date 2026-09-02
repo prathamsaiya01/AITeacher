@@ -6,6 +6,7 @@ import { continueTeachingTurn } from '@/services/teacherService';
 import { retrieveRelevantContext } from '@/services/ragService';
 import { cancelSpeech, speak, startListening, stopListening } from '@/services/voiceService';
 import { avatarService, initializeAvatarSession, setAvatarTalking, stopAvatarSession, streamAvatarVideo } from '@/services/avatarService';
+import AIAvatar from '@/components/AIAvatar';
 import type { AvatarSession } from '@/services/avatarService';
 import type { SuggestedVisual } from '@/services/teacherService';
 import {
@@ -13,7 +14,7 @@ import {
   Clock, BookOpen, HelpCircle, Eye, Code, Calculator, FlaskConical, Scroll, Zap,
   ChevronRight, RotateCcw, Sparkles, MessageSquare, Copy, Loader2,
 } from 'lucide-react';
-import type { Question, Evaluation, SubjectType, ChatMessage } from '@/models';
+import { DEFAULT_TEACHER_PERSONAS, type Question, type Evaluation, type SubjectType, type ChatMessage } from '@/models';
 
 const subjectIcons: Record<SubjectType, typeof Code> = {
   Mathematics: Calculator,
@@ -220,6 +221,7 @@ export default function ClassroomPage() {
   const [greetingError, setGreetingError] = useState<string | null>(null);
   const [visualTab, setVisualTab] = useState<'visuals' | 'notes' | 'code'>('visuals');
   const [avatarSession, setAvatarSession] = useState<AvatarSession>(() => avatarService.getSession());
+  const [selectedPersonaId, setSelectedPersonaId] = useState(DEFAULT_TEACHER_PERSONAS[1].id);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const executeTurnRef = useRef<(message?: string, skipAdvance?: boolean) => Promise<void>>();
 
@@ -229,6 +231,7 @@ export default function ClassroomPage() {
   const lessonConcepts = lesson?.concepts || [];
   const currentSegment = lessonSegments[segmentIndex];
   const currentConcept = lessonConcepts.find((c) => c.id === currentSegment?.conceptId);
+  const selectedPersona = DEFAULT_TEACHER_PERSONAS.find((persona) => persona.id === selectedPersonaId) || DEFAULT_TEACHER_PERSONAS[1];
   const fallbackVisual: SuggestedVisual = {
     type: 'diagram',
     title: `${lesson?.topic || 'Lesson'} concept map`,
@@ -432,7 +435,7 @@ export default function ClassroomPage() {
           if (response.nextAction === 'ask_question') {
             // Generate a question for the student
             if (currentSegment) {
-              const q = await generateQuestion(currentSegment.conceptId, lesson.subject, difficulty);
+              const q = await generateQuestion(currentSegment.conceptId, lesson.subject, difficulty, selectedPersona);
               setCurrentQuestion(q);
               setAwaitingAnswer(true);
               const opts = q.options ? '\n\n' + q.options.map((o, i) => `${String.fromCharCode(65 + i)}) ${o.label}`).join('\n') : '';
@@ -452,7 +455,7 @@ export default function ClassroomPage() {
         setIsThinking(false);
       }
     },
-    [lesson, student, history, currentSegment, lessonConcepts, difficulty, retrievedContext, addTeacherMessage, navigate, speakTeacherMessage]
+    [lesson, student, history, currentSegment, lessonConcepts, difficulty, retrievedContext, addTeacherMessage, navigate, speakTeacherMessage, selectedPersona]
   );
 
   useEffect(() => {
@@ -582,7 +585,7 @@ export default function ClassroomPage() {
         response,
         isCorrect: false,
         timeSpentMs: 5000,
-      });
+      }, selectedPersona);
 
       setEvaluation(ev);
       setUnderstanding((u) => clampUnderstanding(u + ev.understandingDelta));
@@ -618,7 +621,7 @@ export default function ClassroomPage() {
       setCurrentQuestion(null);
       setIsThinking(true);
       if (lesson && currentSegment) {
-        generateQuestion(currentSegment.conceptId, lesson.subject, difficulty).then((q) => {
+        generateQuestion(currentSegment.conceptId, lesson.subject, difficulty, selectedPersona).then((q) => {
           setIsThinking(false);
           setCurrentQuestion(q);
           setAwaitingAnswer(true);
@@ -679,7 +682,7 @@ export default function ClassroomPage() {
     <div className="min-h-screen px-4 py-6">
       <div className="max-w-7xl mx-auto">
         {/* Top bar */}
-        <div className="glass rounded-2xl p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
+          <div className="glass rounded-2xl p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center">
               <Brain className="w-5 h-5 text-white" />
@@ -697,6 +700,18 @@ export default function ClassroomPage() {
               <BookOpen className="w-4 h-4" />
               <span className="hidden sm:inline">{lesson.title}</span>
             </div>
+            <label className="flex items-center gap-2 rounded-xl border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-xs text-slate-300">
+              <Sparkles className="h-4 w-4 text-violet-300" aria-hidden="true" />
+              <span className="hidden md:inline">Guide</span>
+              <select
+                aria-label="Choose your AI guide"
+                value={selectedPersonaId}
+                onChange={(event) => setSelectedPersonaId(event.target.value)}
+                className="max-w-[9rem] bg-transparent font-semibold text-white outline-none"
+              >
+                {DEFAULT_TEACHER_PERSONAS.map((persona) => <option key={persona.id} value={persona.id} className="bg-ink-900">{persona.name}</option>)}
+              </select>
+            </label>
             <button
               type="button"
               onClick={handleSkipExplanation}
@@ -757,34 +772,16 @@ export default function ClassroomPage() {
           <div className="lg:col-span-2 space-y-4">
             {/* Teacher avatar + message */}
             <div className="glass-card p-6">
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0">
-                  <div
-                    role="img"
-                    aria-label={`Animated Prof. Nova avatar, ${avatarSession.status}`}
-                    className={`relative w-20 h-20 overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center ${isThinking || isSpeaking || avatarSession.isTalking ? 'animate-pulse-glow' : ''}`}
-                  >
-                    {/* Browser fallback avatar surface; replace with a HeyGen/custom stream when a streamUrl is supplied. */}
-                    <canvas aria-hidden="true" className="absolute inset-0 w-full h-full opacity-30 bg-gradient-to-br from-cyan-300/40 via-transparent to-violet-900/60" />
-                    <Brain className="w-10 h-10 text-white" />
-                    {(isSpeaking || avatarSession.isTalking) && <span className="absolute -right-1 -top-1 w-3 h-3 rounded-full bg-success-400 animate-ping" />}
-                  </div>
-                  <div className="text-center text-xs text-slate-400 mt-2">Prof. Nova · {avatarSession.status}</div>
-                </div>
-                <div className="flex-1 min-h-[80px]">
-                  {isThinking ? (
-                    <div className="flex items-center gap-2 text-slate-400">
-                      <div className="flex gap-1">
-                        {[0, 1, 2].map((i) => (
-                          <div key={i} className="w-2 h-2 rounded-full bg-violet-400 animate-wave" style={{ animationDelay: `${i * 0.15}s` }} />
-                        ))}
-                      </div>
-                      <span className="text-sm">AI Teacher is thinking...</span>
-                    </div>
-                  ) : (
-                    <p className="text-slate-200 leading-relaxed">{teacherMessage}</p>
-                  )}
-                </div>
+              <AIAvatar
+                avatarUrl={avatarSession.streamUrl || selectedPersona.avatarUrl || undefined}
+                isSpeaking={isSpeaking || avatarSession.isTalking}
+                transcript={isThinking ? 'AI Teacher is thinking...' : teacherMessage}
+                personaName={selectedPersona.name}
+              />
+              <div className="mt-3 border-t border-white/5 pt-3 text-xs text-slate-400">
+                <span className="font-semibold text-violet-200">{selectedPersona.title}</span>
+                <span className="mx-2 text-slate-600">·</span>
+                {selectedPersona.style}
               </div>
             </div>
 

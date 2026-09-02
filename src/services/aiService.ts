@@ -20,6 +20,7 @@ import type {
   QuestionOption,
   AssessmentQuestion,
   SubjectType,
+  TeacherPersona,
 } from '@/models';
 import { processDocument } from './documentService';
 import { storeDocumentInSupabase } from './ragService';
@@ -97,9 +98,45 @@ const geminiLessonSchema: Schema = {
         ]
       }
     },
-    estimatedDuration: { type: Type.NUMBER }
+    duration: { type: Type.NUMBER },
+    durationUnit: { type: Type.STRING, enum: ['minutes', 'days'] },
+    totalSections: { type: Type.NUMBER },
+    sections: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          importance: { type: Type.STRING, enum: ['essential', 'important', 'supporting'] },
+          allocatedMinutes: { type: Type.NUMBER },
+          concepts: { type: Type.ARRAY, items: { type: Type.STRING } },
+          explanationDepth: { type: Type.STRING, enum: ['brief', 'medium', 'deep'] },
+          examples: { type: Type.ARRAY, items: { type: Type.STRING } },
+          questions: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ['title', 'importance', 'allocatedMinutes', 'concepts', 'explanationDepth', 'examples', 'questions']
+      }
+    },
+    assessmentDuration: { type: Type.NUMBER },
+    remainingTimeStrategy: { type: Type.STRING },
+    completionCriteria: { type: Type.ARRAY, items: { type: Type.STRING } },
+    days: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          day: { type: Type.NUMBER },
+          objective: { type: Type.STRING },
+          topics: { type: Type.ARRAY, items: { type: Type.STRING } },
+          activities: { type: Type.ARRAY, items: { type: Type.STRING } },
+          estimatedMinutes: { type: Type.NUMBER },
+          status: { type: Type.STRING, enum: ['completed', 'current', 'locked', 'upcoming'] },
+        },
+        required: ['day', 'objective', 'topics', 'activities', 'estimatedMinutes', 'status']
+      }
+    }
   },
-  required: ['title', 'learningObjectives', 'concepts', 'estimatedDuration']
+  required: ['title', 'learningObjectives', 'concepts', 'duration', 'durationUnit', 'sections']
 };
 
 export interface GenerateLessonParams {
@@ -110,6 +147,157 @@ export interface GenerateLessonParams {
   teachingStyle: string;
   availableTime: string;
   desiredDepth: string;
+}
+
+function normalizeDurationInput(value?: string | number): { totalMinutes: number; unit: 'minutes' | 'days'; dayCount: number } {
+  if (typeof value === 'number') {
+    if (value === 1 || value === 3 || value === 7) {
+      return { totalMinutes: value * 60, unit: 'days', dayCount: value };
+    }
+    return { totalMinutes: Math.max(5, value), unit: 'minutes', dayCount: 0 };
+  }
+
+  if (!value) return { totalMinutes: 30, unit: 'minutes', dayCount: 0 };
+
+  const normalized = value.toLowerCase().trim();
+  const dayMatch = normalized.match(/(1|3|7)\s*(day|days)/);
+  if (dayMatch) {
+    const count = Number(dayMatch[1]);
+    return { totalMinutes: count * 60, unit: 'days', dayCount: count };
+  }
+
+  const minutesMatch = normalized.match(/(\d+)\s*(minute|min|minutes|mins)/);
+  if (minutesMatch) {
+    const total = Number(minutesMatch[1]);
+    return { totalMinutes: Math.max(5, total), unit: 'minutes', dayCount: 0 };
+  }
+
+  const parsed = Number(normalized.replace(/[^\d]/g, ''));
+  return { totalMinutes: Math.max(5, Number.isFinite(parsed) ? parsed : 30), unit: 'minutes', dayCount: 0 };
+}
+
+function buildTimeAwareLessonPlan(
+  topic: string,
+  subject: SubjectType,
+  studentLevel: string,
+  learningGoal: string,
+  availableTime?: string | number
+): { totalMinutes: number; durationUnit: 'minutes' | 'days'; totalSections: number; sections: any[]; assessmentMinutes: number; remainingTimeStrategy: string; completionCriteria: string[]; days?: any[] } {
+  const duration = normalizeDurationInput(availableTime);
+  const totalMinutes = duration.unit === 'days' ? duration.totalMinutes : Math.max(5, Math.min(120, duration.totalMinutes));
+  const dayCount = duration.unit === 'days' ? duration.dayCount : 0;
+
+  const conceptSeeds = {
+    Mathematics: ['Foundations', 'Core method', 'Worked example', 'Practice check'],
+    Physics: ['Principle', 'Key law', 'Example problem', 'Application check'],
+    Biology: ['Core idea', 'Process or system', 'Example', 'Review question'],
+    History: ['Context', 'Turning point', 'Cause and effect', 'Assessment'],
+    Programming: ['Concept overview', 'Pattern or syntax', 'Example code', 'Practice challenge'],
+    General: ['Core idea', 'Important detail', 'Worked example', 'Quick review'],
+  };
+
+  const concepts = conceptSeeds[subject] || conceptSeeds.General;
+
+  if (dayCount > 0) {
+    const dayPlan = Array.from({ length: dayCount }, (_, idx) => {
+      const dayNumber = idx + 1;
+      const dayTopics = concepts.slice(0, Math.min(concepts.length, Math.max(1, Math.ceil(concepts.length / dayCount))));
+      return {
+        day: dayNumber,
+        objective: dayNumber === dayCount ? 'Review, assess, and finalize understanding' : `${topic} focus for day ${dayNumber}`,
+        topics: dayTopics.map((label, conceptIndex) => `${label}${conceptIndex === 0 ? ` for ${topic}` : ''}`),
+        activities: [
+          dayNumber === dayCount ? 'Final recap and quick assessment' : 'Core concept study with a worked example',
+          'Practice and reflection',
+          dayNumber === 1 ? 'Build foundations and key vocabulary' : 'Targeted revision and consolidation',
+        ],
+        estimatedMinutes: 30 + (dayNumber % 2 === 0 ? 10 : 0),
+        status: dayNumber === 1 ? 'current' : dayNumber === dayCount ? 'upcoming' : 'locked',
+      };
+    });
+
+    return {
+      totalMinutes,
+      durationUnit: 'days',
+      totalSections: dayCount,
+      sections: dayPlan.map((day) => ({
+        title: `Day ${day.day}: ${day.objective}`,
+        importance: day.day === dayCount ? 'essential' : 'important',
+        allocatedMinutes: day.estimatedMinutes,
+        concepts: day.topics,
+        explanationDepth: day.day === dayCount ? 'medium' : 'brief',
+        examples: [`Example activity for ${topic}`],
+        questions: [`Check understanding for ${day.objective}`],
+      })),
+      assessmentMinutes: dayCount > 0 ? 12 : 0,
+      remainingTimeStrategy: 'Break the topic into daily milestones and keep the newest concept anchored to the next day’s practice.',
+      completionCriteria: [
+        `Cover the essential foundations of ${topic}`,
+        'Practice at least one worked example',
+        'Complete a short daily understanding check',
+      ],
+      days: dayPlan,
+    };
+  }
+
+  const sectionCount = totalMinutes <= 5 ? 3 : totalMinutes <= 10 ? 4 : totalMinutes <= 20 ? 5 : totalMinutes <= 30 ? 6 : totalMinutes <= 60 ? 7 : 8;
+  const sectionTargets: number[] = Array.from({ length: sectionCount }, (_, index) => {
+    const remaining = sectionCount - index;
+    const base = totalMinutes / sectionCount;
+    if (index === 0) return Math.max(1, Math.round(base * 0.9));
+    if (index === sectionCount - 1) return Math.max(2, totalMinutes - Math.floor((sectionCount - 1) * base));
+    return Math.max(2, Math.round(base + (remaining % 2 === 0 ? 0 : 1)));
+  });
+
+  const totalAllocated = sectionTargets.reduce((sum, value) => sum + value, 0);
+  const normalizedTargets = sectionTargets.map((value) => Math.max(1, Math.round((value / totalAllocated) * totalMinutes)));
+  const finalTargets = normalizedTargets.slice();
+  finalTargets[0] = Math.max(1, totalMinutes - finalTargets.slice(1).reduce((sum, v) => sum + v, 0));
+
+  const sections = finalTargets.map((minutes, index) => {
+    const sectionTitle = {
+      0: 'Foundations',
+      1: 'Key concept',
+      2: 'Example and application',
+      3: 'Practice check',
+      4: 'Deeper explanation',
+      5: 'Final recap',
+    }[index] || `Section ${index + 1}`;
+
+    return {
+      title: `${sectionTitle}: ${topic}`,
+      importance: index === 0 ? 'essential' : index === finalTargets.length - 1 ? 'important' : 'supporting',
+      allocatedMinutes: minutes,
+      concepts: concepts.slice(0, Math.min(concepts.length, 1 + Math.min(4, index + 1))),
+      explanationDepth: totalMinutes <= 10 ? 'brief' : totalMinutes <= 30 ? 'medium' : 'deep',
+      examples: [
+        `Apply ${topic} to a real scenario`,
+        index < 2 ? 'Concrete worked example' : 'Mini-practice problem',
+      ],
+      questions: [
+        `Quick check for ${topic}`,
+        totalMinutes > 20 ? `Deepen understanding of ${topic}` : 'Final evaluation question',
+      ],
+    };
+  });
+
+  return {
+    totalMinutes,
+    durationUnit: 'minutes',
+    totalSections: sections.length,
+    sections,
+    assessmentMinutes: totalMinutes <= 10 ? 2 : totalMinutes <= 30 ? 3 : totalMinutes <= 60 ? 6 : 8,
+    remainingTimeStrategy: totalMinutes <= 10
+      ? 'Compress explanations and focus on the minimum essential concepts to finish the full topic overview.'
+      : totalMinutes <= 30
+        ? 'Keep the lesson moving with one main example and a short check before the final assessment.'
+        : 'Spend more time on foundations, examples, and misconception checks while reserving a final recap window.',
+    completionCriteria: [
+      `Explain the essential ideas behind ${topic}`,
+      'Complete at least one worked example',
+      'Finish a final understanding check for the topic',
+    ],
+  };
 }
 
 export async function saveLessonToDatabase(lesson: Lesson): Promise<boolean> {
@@ -177,7 +365,9 @@ export async function generateLesson(
 - Available Time: ${availableTime}
 - Desired Depth: ${desiredDepth}${documentContext}${memoryContext}
 
-Provide 3 to 5 core concepts. For each concept, include a teaching explanation, an illustrative example, visual content suggestions, and a multiple-choice check question with 4 options.`;
+Use the selected time budget to determine scope, pacing, and depth. For short lessons, compress explanations and prioritize essential concepts. For long lessons, spread the topic across multiple sections or days. Do NOT spend the full time on an introduction. The lesson must feel qualitatively different for a 5-minute lesson, 20-minute lesson, 60-minute lesson, and 7-day plan.
+
+Provide 3 to 5 core concepts, a realistic time budget by section, and a final assessment plan. Return structured JSON only.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -191,8 +381,20 @@ Provide 3 to 5 core concepts. For each concept, include a teaching explanation, 
     });
 
     const parsed = JSON.parse(response.text || '{}');
+    const timePlan = buildTimeAwareLessonPlan(topic, subject, studentLevel, learningGoal, availableTime);
+    const effectivePlan = {
+      ...timePlan,
+      totalMinutes: Number(parsed.duration) || timePlan.totalMinutes,
+      durationUnit: parsed.durationUnit || timePlan.durationUnit,
+      totalSections: Number(parsed.totalSections) || timePlan.totalSections,
+      sections: Array.isArray(parsed.sections) && parsed.sections.length > 0 ? parsed.sections : timePlan.sections,
+      assessmentMinutes: Number(parsed.assessmentDuration) || timePlan.assessmentMinutes,
+      remainingTimeStrategy: parsed.remainingTimeStrategy || timePlan.remainingTimeStrategy,
+      completionCriteria: Array.isArray(parsed.completionCriteria) && parsed.completionCriteria.length > 0 ? parsed.completionCriteria : timePlan.completionCriteria,
+      days: Array.isArray(parsed.days) && parsed.days.length > 0 ? parsed.days : timePlan.days,
+    };
 
-    const concepts: Concept[] = (parsed.concepts || []).map((c: any, index: number) => ({
+    const fallbackConcepts = (parsed.concepts || []).map((c: any, index: number) => ({
       id: `c${index + 1}`,
       name: c.name,
       description: c.explanation,
@@ -200,49 +402,71 @@ Provide 3 to 5 core concepts. For each concept, include a teaching explanation, 
       estimatedMinutes: c.estimatedMinutes || 5,
     }));
 
+    const concepts: Concept[] = fallbackConcepts.length > 0
+      ? fallbackConcepts
+      : (effectivePlan.sections || []).flatMap((section: any, sectionIndex: number) => {
+          const sectionConcepts = Array.isArray(section.concepts) && section.concepts.length > 0 ? section.concepts : [section.title];
+          return sectionConcepts.map((name: string, conceptIndex: number) => ({
+            id: `c${sectionIndex + 1}_${conceptIndex + 1}`,
+            name: String(name).replace(/^Day \d+: /, ''),
+            description: `Key concept for ${name}.`,
+            difficulty: sectionIndex + 1,
+            estimatedMinutes: Math.max(3, Math.round((section.allocatedMinutes || 5) / Math.max(1, sectionConcepts.length))),
+          }));
+        });
+
     const segments: LessonSegment[] = [];
-    (parsed.concepts || []).forEach((c: any, index: number) => {
-      const cId = `c${index + 1}`;
-      segments.push({
-        id: uid('seg'),
-        title: `Teach: ${c.name}`,
-        type: 'teach',
-        conceptId: cId,
-        durationMin: c.estimatedMinutes || 4,
-        description: c.explanation,
-        completed: false
+    if (effectivePlan.durationUnit === 'days' && Array.isArray(effectivePlan.days) && effectivePlan.days.length > 0) {
+      effectivePlan.days.forEach((day: any) => {
+        segments.push({
+          id: uid('seg'),
+          title: `Day ${day.day}: ${day.objective}`,
+          type: 'teach',
+          conceptId: `day-${day.day}`,
+          durationMin: day.estimatedMinutes || 30,
+          description: (day.activities || []).join(' · '),
+          completed: false,
+        });
       });
-      segments.push({
-        id: uid('seg'),
-        title: `Example: ${c.name}`,
-        type: 'example',
-        conceptId: cId,
-        durationMin: 2,
-        description: c.example,
-        completed: false
+    } else {
+      (effectivePlan.sections || []).forEach((section: any, index: number) => {
+        const title = section.title || `Section ${index + 1}`;
+        const sectionConcepts = Array.isArray(section.concepts) && section.concepts.length > 0 ? section.concepts : [topic];
+        segments.push({
+          id: uid('seg'),
+          title,
+          type: 'teach',
+          conceptId: `s${index + 1}`,
+          durationMin: section.allocatedMinutes || 5,
+          description: `Focus: ${sectionConcepts.join(', ')}. ${section.explanationDepth || 'medium'} explanation depth.`,
+          completed: false,
+        });
+        if (Array.isArray(section.examples) && section.examples.length > 0) {
+          segments.push({
+            id: uid('seg'),
+            title: `Example: ${title}`,
+            type: 'example',
+            conceptId: `s${index + 1}`,
+            durationMin: Math.max(2, Math.floor((section.allocatedMinutes || 5) / 3)),
+            description: section.examples[0],
+            completed: false,
+          });
+        }
+        if (Array.isArray(section.questions) && section.questions.length > 0) {
+          segments.push({
+            id: uid('seg'),
+            title: `Check: ${title}`,
+            type: 'question',
+            conceptId: `s${index + 1}`,
+            durationMin: Math.max(2, Math.min(5, Math.ceil((section.allocatedMinutes || 5) / 4))),
+            description: section.questions[0],
+            completed: false,
+          });
+        }
       });
-      segments.push({
-        id: uid('seg'),
-        title: `Check: ${c.name}`,
-        type: 'question',
-        conceptId: cId,
-        durationMin: 2,
-        description: `Assess understanding of ${c.name}`,
-        completed: false
-      });
-    });
+    }
 
-    segments.push({
-      id: uid('seg'),
-      title: 'Lesson Summary',
-      type: 'summary',
-      conceptId: 'summary',
-      durationMin: 3,
-      description: `Recap of ${parsed.title || topic}`,
-      completed: false
-    });
-
-    return {
+    const createdLesson: Lesson = {
       id: uid('lesson'),
       title: parsed.title || topic,
       subject,
@@ -250,31 +474,45 @@ Provide 3 to 5 core concepts. For each concept, include a teaching explanation, 
       studentId: student.id,
       concepts,
       segments,
-      estimatedMinutes: parsed.estimatedDuration || segments.reduce((s, seg) => s + seg.durationMin, 0),
+      estimatedMinutes: Number(parsed.duration) || effectivePlan.totalMinutes || segments.reduce((s, seg) => s + seg.durationMin, 0),
       createdAt: new Date().toISOString(),
       status: 'planned',
+      durationMinutes: Number(parsed.duration) || effectivePlan.totalMinutes,
+      durationUnit: effectivePlan.durationUnit,
+      timePlan: effectivePlan,
+      days: effectivePlan.days,
     };
+
+    return createdLesson;
   } catch (error) {
     console.error('Gemini Lesson Generation failed, using fallback:', error);
-    return fallbackGenerateLesson(student, topic);
+    return fallbackGenerateLesson(student, topic, availableTime);
   }
 }
 
 // Fallback generator in case of API failure or missing network
-function fallbackGenerateLesson(student: Student, topic: string): Lesson {
+function fallbackGenerateLesson(student: Student, topic: string, availableTime?: string | number): Lesson {
   const subject = detectSubject(topic);
+  const timePlan = buildTimeAwareLessonPlan(topic, subject, student.level || 'Intermediate', student.goal || 'Master the topic', availableTime);
+
   const concepts: Concept[] = [
     { id: 'c1', name: `${topic} - Core Basics`, description: `Fundamental principles of ${topic}.`, difficulty: 2, estimatedMinutes: 5 },
     { id: 'c2', name: `${topic} - Key Mechanics`, description: `Understanding how ${topic} operates.`, difficulty: 3, estimatedMinutes: 6 },
     { id: 'c3', name: `${topic} - Practical Application`, description: `Real-world examples of ${topic}.`, difficulty: 4, estimatedMinutes: 5 },
   ];
   const segments: LessonSegment[] = [];
-  for (const c of concepts) {
-    segments.push({ id: uid('seg'), title: `Teach: ${c.name}`, type: 'teach', conceptId: c.id, durationMin: c.estimatedMinutes, description: c.description, completed: false });
-    segments.push({ id: uid('seg'), title: `Example: ${c.name}`, type: 'example', conceptId: c.id, durationMin: 2, description: `Worked example for ${c.name}.`, completed: false });
-    segments.push({ id: uid('seg'), title: `Check: ${c.name}`, type: 'question', conceptId: c.id, durationMin: 2, description: `Assess understanding of ${c.name}.`, completed: false });
+  if (timePlan.durationUnit === 'days' && Array.isArray(timePlan.days) && timePlan.days.length > 0) {
+    timePlan.days.forEach((day: any) => {
+      segments.push({ id: uid('seg'), title: `Day ${day.day}: ${day.objective}`, type: 'teach', conceptId: `day-${day.day}`, durationMin: day.estimatedMinutes || 30, description: (day.activities || []).join(' · '), completed: false });
+    });
+  } else {
+    for (const c of concepts) {
+      segments.push({ id: uid('seg'), title: `Teach: ${c.name}`, type: 'teach', conceptId: c.id, durationMin: c.estimatedMinutes, description: c.description, completed: false });
+      segments.push({ id: uid('seg'), title: `Example: ${c.name}`, type: 'example', conceptId: c.id, durationMin: 2, description: `Worked example for ${c.name}.`, completed: false });
+      segments.push({ id: uid('seg'), title: `Check: ${c.name}`, type: 'question', conceptId: c.id, durationMin: 2, description: `Assess understanding of ${c.name}.`, completed: false });
+    }
+    segments.push({ id: uid('seg'), title: 'Lesson Summary', type: 'summary', conceptId: 'summary', durationMin: 3, description: 'Recap of all concepts covered.', completed: false });
   }
-  segments.push({ id: uid('seg'), title: 'Lesson Summary', type: 'summary', conceptId: 'summary', durationMin: 3, description: 'Recap of all concepts covered.', completed: false });
 
   return {
     id: uid('lesson'),
@@ -284,9 +522,13 @@ function fallbackGenerateLesson(student: Student, topic: string): Lesson {
     studentId: student.id,
     concepts,
     segments,
-    estimatedMinutes: segments.reduce((s, seg) => s + seg.durationMin, 0),
+    estimatedMinutes: timePlan.totalMinutes || segments.reduce((s, seg) => s + seg.durationMin, 0),
     createdAt: new Date().toISOString(),
     status: 'planned',
+    durationMinutes: timePlan.totalMinutes,
+    durationUnit: timePlan.durationUnit,
+    timePlan,
+    days: timePlan.days,
   };
 }
 
@@ -360,10 +602,11 @@ const questionTemplates: Record<SubjectType, Question[]> = {
   ],
 };
 
-export async function generateQuestion(conceptId: string, subject: SubjectType, difficulty: number): Promise<Question> {
+export async function generateQuestion(conceptId: string, subject: SubjectType, difficulty: number, persona: TeacherPersona): Promise<Question> {
   await delay(600);
   const templates = questionTemplates[subject] || questionTemplates.General;
-  const pool = templates.filter((q) => Math.abs(q.difficulty - difficulty) <= 1);
+  const personaDifficulty = persona.id === 'prof-hardik' ? Math.min(5, difficulty + 1) : persona.id === 'captain-code' ? Math.max(1, difficulty) : difficulty;
+  const pool = templates.filter((q) => Math.abs(q.difficulty - personaDifficulty) <= 1);
   const chosen = (pool.length > 0 ? pool : templates)[Math.floor(Math.random() * (pool.length > 0 ? pool.length : templates.length))];
   return { ...chosen, id: uid('q'), conceptId };
 }
@@ -383,18 +626,23 @@ async function generateGeminiJson<T>(prompt: string, responseSchema: Schema): Pr
 }
 
 // ---------- Answer evaluation ----------
-export async function evaluateAnswer(question: Question, answer: Answer): Promise<Evaluation> {
+export async function evaluateAnswer(question: Question, answer: Answer, persona: TeacherPersona): Promise<Evaluation> {
   const fallbackCorrect = answer.response.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase();
   const fallback: Evaluation = fallbackCorrect
-    ? { isCorrect: true, feedback: 'Good work. Let\'s deepen your understanding with a harder question.', newDifficulty: Math.min(5, question.difficulty + 1), understandingDelta: 8, shouldReExplain: false }
-    : { isCorrect: false, feedback: 'Let\'s revisit the idea from another angle.', newDifficulty: Math.max(1, question.difficulty - 1), understandingDelta: -5, shouldReExplain: true, misconception: { id: uid('mis'), conceptId: question.conceptId, conceptName: question.conceptId, description: `The response "${answer.response}" does not match the expected concept.`, alternativeExplanation: question.explanation, analogy: `Think of the concept as a connected set of ideas: ${question.explanation}`, simplerExample: question.hint || `What is the simplest example of ${question.conceptId}?` } };
+    ? { isCorrect: true, feedback: `${persona.name}: Good work. Now justify the idea one level more deeply.`, newDifficulty: Math.min(5, question.difficulty + 1), understandingDelta: 8, shouldReExplain: false }
+    : { isCorrect: false, feedback: `${persona.name}: Let\'s revisit the idea from another angle and make the reasoning precise.`, newDifficulty: Math.max(1, question.difficulty - 1), understandingDelta: -5, shouldReExplain: true, misconception: { id: uid('mis'), conceptId: question.conceptId, conceptName: question.conceptId, description: `The response "${answer.response}" does not match the expected concept.`, alternativeExplanation: question.explanation, analogy: `Think of the concept as a connected set of ideas: ${question.explanation}`, simplerExample: question.hint || `What is the simplest example of ${question.conceptId}?` } };
 
   try {
-    const parsed = await generateGeminiJson<Partial<Evaluation>>(`Evaluate this student's answer as a Socratic teacher.
+    const parsed = await generateGeminiJson<Partial<Evaluation>>(`Evaluate this student's answer as the selected AI teacher persona.
+  Persona: ${persona.name}
+  Title: ${persona.title}
+  Style: ${persona.style}
+  Persona instructions: ${persona.promptStyle}
 Question: ${question.prompt}
 Expected answer: ${question.correctAnswer}
 Explanation: ${question.explanation}
 Student answer: ${answer.response}
+  Use the persona's voice and strictness. Prof. Hardik requires precise terminology and valid reasoning; Prof. Nova rewards conceptual intuition when the core idea is correct; Captain Code prioritizes practical application and actionable feedback.
 Return JSON with isCorrect, feedback, newDifficulty (1-5), understandingDelta (-20 to 20), shouldReExplain, and misconception when incorrect.`, {
       type: Type.OBJECT,
       properties: {
@@ -413,7 +661,14 @@ Return JSON with isCorrect, feedback, newDifficulty (1-5), understandingDelta (-
 
 export async function detectMisconception(question: Question, answer: Answer): Promise<Misconception | null> {
   await delay(400);
-  const ev = await evaluateAnswer(question, answer);
+  const ev = await evaluateAnswer(question, answer, {
+    id: 'prof-nova',
+    name: 'Prof. Nova',
+    title: 'The Empathetic Concept Guide',
+    style: 'Clear, empathetic, and analogy-driven',
+    avatarUrl: '',
+    promptStyle: 'Reward conceptual intuition and explain ideas with approachable analogies.',
+  });
   return ev.misconception || null;
 }
 

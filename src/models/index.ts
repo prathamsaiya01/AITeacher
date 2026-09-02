@@ -4,7 +4,7 @@ export type Language = 'English' | 'Hindi' | 'Hinglish';
 export type Level = 'Beginner' | 'Intermediate' | 'Advanced';
 export type TeachingStyle = 'Socratic' | 'Direct' | 'Storytelling' | 'Visual';
 export type Depth = 'Overview' | 'Standard' | 'Deep Dive';
-export type TimeOption = 5 | 20 | 30 | 60 | 7; // minutes, 7 = 7 days
+export type TimeOption = 5 | 10 | 20 | 30 | 60 | 1 | 3 | 7; // minutes, day values are interpreted as multi-day plans
 export type SubjectType =
   | 'Mathematics'
   | 'Physics'
@@ -24,6 +24,42 @@ export interface Student {
   availableTime: TimeOption;
   createdAt: string;
 }
+
+export interface TeacherPersona {
+  id: string;
+  name: string;
+  title: string;
+  style: string;
+  avatarUrl: string;
+  promptStyle: string;
+}
+
+export const DEFAULT_TEACHER_PERSONAS: TeacherPersona[] = [
+  {
+    id: 'prof-hardik',
+    name: 'Prof. Hardik',
+    title: 'The Rigorous Socratic Checker',
+    style: 'Strict, rigorous, and precise',
+    avatarUrl: '',
+    promptStyle: 'Focus on edge cases, precise terminology, deep conceptual proofs, and challenging assumptions. Do not reward a lucky guess without sound reasoning.',
+  },
+  {
+    id: 'prof-nova',
+    name: 'Prof. Nova',
+    title: 'The Empathetic Concept Guide',
+    style: 'Clear, empathetic, and analogy-driven',
+    avatarUrl: '',
+    promptStyle: 'Reward conceptual intuition, explain ideas with approachable analogies and visual examples, and make difficult ideas feel manageable without losing accuracy.',
+  },
+  {
+    id: 'captain-code',
+    name: 'Captain Code',
+    title: 'The Practical Application Mentor',
+    style: 'Fast-paced, practical, and real-world focused',
+    avatarUrl: '',
+    promptStyle: 'Move quickly toward practical application, use real-world scenarios and hands-on challenges, and prioritize useful implementation over abstract exposition.',
+  },
+];
 
 export type QuestionType =
   | 'MCQ'
@@ -96,6 +132,36 @@ export interface LessonSegment {
   completed: boolean;
 }
 
+export interface LessonSectionPlan {
+  title: string;
+  importance: 'essential' | 'important' | 'supporting';
+  allocatedMinutes: number;
+  concepts: string[];
+  explanationDepth: 'brief' | 'medium' | 'deep';
+  examples: string[];
+  questions: string[];
+}
+
+export interface LessonDayPlan {
+  day: number;
+  objective: string;
+  topics: string[];
+  activities: string[];
+  estimatedMinutes: number;
+  status: 'completed' | 'current' | 'locked' | 'upcoming';
+}
+
+export interface LessonTimePlan {
+  totalMinutes: number;
+  durationUnit: 'minutes' | 'days';
+  totalSections: number;
+  sections: LessonSectionPlan[];
+  assessmentMinutes: number;
+  remainingTimeStrategy: string;
+  completionCriteria: string[];
+  days?: LessonDayPlan[];
+}
+
 export interface Lesson {
   id: string;
   title: string;
@@ -107,6 +173,10 @@ export interface Lesson {
   estimatedMinutes: number;
   createdAt: string;
   status: 'planned' | 'in-progress' | 'completed';
+  durationMinutes?: number;
+  durationUnit?: 'minutes' | 'days';
+  timePlan?: LessonTimePlan;
+  days?: LessonDayPlan[];
 }
 
 export interface AssessmentQuestion {

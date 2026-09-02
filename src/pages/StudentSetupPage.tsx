@@ -31,9 +31,12 @@ const depths: { value: Depth; desc: string }[] = [
 
 const times: { value: TimeOption; label: string; desc: string }[] = [
   { value: 5, label: '5 min', desc: 'Quick concept' },
+  { value: 10, label: '10 min', desc: 'Focused review' },
   { value: 20, label: '20 min', desc: 'Short session' },
   { value: 30, label: '30 min', desc: 'Full lesson' },
   { value: 60, label: '60 min', desc: 'Deep study' },
+  { value: 1, label: '1 day', desc: 'Single-day sprint' },
+  { value: 3, label: '3 days', desc: 'Multi-day drill' },
   { value: 7, label: '7 days', desc: 'Multi-day plan' },
 ];
 

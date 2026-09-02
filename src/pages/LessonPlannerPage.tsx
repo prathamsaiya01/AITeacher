@@ -30,7 +30,8 @@ export default function LessonPlannerPage() {
       const lessonData = await generateLesson(
         student!,
         topic || uploadedDoc?.fileName || 'General Topic',
-        uploadedDoc || undefined
+        uploadedDoc || undefined,
+        { availableTime: `${student!.availableTime} ${student!.availableTime === 1 || student!.availableTime === 3 || student!.availableTime === 7 ? 'days' : 'minutes'}` }
       );
       if (!cancelled) setLocalLesson(lessonData);
     };
