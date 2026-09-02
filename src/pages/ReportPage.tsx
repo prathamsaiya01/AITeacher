@@ -283,6 +283,29 @@ export default function ReportPage() {
           </div>
         )}
 
+        {(assessmentResult?.answers.length || 0) > 0 && (
+          <div className="glass-card mb-6 p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-cyan-300" />
+              <h2 className="text-lg font-semibold text-white">Quiz Answer Review</h2>
+            </div>
+            <div className="space-y-3">
+              {assessmentResult?.answers.map((answer, index) => (
+                <div key={answer.questionId} className={`rounded-xl border p-4 ${answer.isCorrect ? 'border-success-400/20 bg-success-500/5' : 'border-error-400/20 bg-error-500/5'}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-sm font-medium text-white">{index + 1}. {answer.question || 'Assessment question'}</p>
+                    <span className={`shrink-0 text-xs font-semibold ${answer.isCorrect ? 'text-success-300' : 'text-error-300'}`}>{answer.isCorrect ? 'Correct' : 'Review'}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-300"><span className="font-medium text-slate-400">Your answer:</span> {answer.response || 'No answer'}</p>
+                  {!answer.isCorrect && <p className="mt-1 text-sm text-slate-300"><span className="font-medium text-cyan-300">Expected:</span> {answer.expectedAnswer}</p>}
+                  <p className="mt-2 text-sm text-slate-300"><span className="font-medium text-violet-200">Analysis:</span> {answer.feedback}</p>
+                  <div className="mt-3 rounded-lg border border-white/5 bg-ink-950/40 p-3 text-sm text-slate-200"><span className="font-medium text-warning-300">Solution:</span> {answer.solution}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col items-center justify-center gap-4 pt-2 sm:flex-row">
           <button onClick={() => navigate('/classroom')} className="btn-secondary flex items-center gap-2">
             <RotateCcw className="h-4 w-4" />

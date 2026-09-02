@@ -69,10 +69,14 @@ export default function AssessmentPage() {
     try {
       if (!lesson || !student) throw new Error('No active lesson or student found');
       const result = await gradeAssessment('assessment_1', lesson.id, questions, finalResponses);
-      await saveCompletedLesson(student.id, lesson);
-      await saveAssessmentResult(student.id, result);
       setAssessmentResult(result);
-      await refreshProgress();
+      try {
+        await saveCompletedLesson(student.id, lesson);
+        await saveAssessmentResult(student.id, result);
+        await refreshProgress();
+      } catch (persistenceError) {
+        console.warn('Assessment graded, but progress could not be saved:', persistenceError);
+      }
       navigate('/report');
     } catch (error) {
       console.error('Failed to grade assessment:', error);

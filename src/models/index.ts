@@ -200,7 +200,17 @@ export interface AssessmentQuestion {
 export interface AssessmentResult {
   assessmentId: string;
   lessonId: string;
-  answers: { questionId: string; response: string; score: number; isCorrect: boolean; conceptId?: string }[];
+  answers: {
+    questionId: string;
+    response: string;
+    score: number;
+    isCorrect: boolean;
+    conceptId?: string;
+    feedback?: string;
+    solution?: string;
+    question?: string;
+    expectedAnswer?: string;
+  }[];
   totalScore: number;
   maxScore: number;
   percentage: number;

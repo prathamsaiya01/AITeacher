@@ -707,15 +707,71 @@ export async function gradeAssessment(
   responses: Record<string, string>
 ): Promise<AssessmentResult> {
   await delay(800);
-  const answers = questions.map((q) => {
-    const response = responses[q.id] || '';
-    const isCorrect = response.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase() ||
-      (q.options?.some((o) => o.label === response && o.isCorrect) ?? false);
-    return { questionId: q.id, response, score: isCorrect ? q.maxScore : 0, isCorrect, conceptId: q.conceptId };
-  });
+  const answers = questions.map((q) => buildAssessmentAnswer(q, responses[q.id] || ''));
   const totalScore = answers.reduce((s, a) => s + a.score, 0);
   const maxScore = questions.reduce((s, q) => s + q.maxScore, 0);
-  return { assessmentId, lessonId, answers, totalScore, maxScore, percentage: Math.round((totalScore / maxScore) * 100) };
+  const fallbackResult: AssessmentResult = { assessmentId, lessonId, answers, totalScore, maxScore, percentage: maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0 };
+
+  try {
+    const analyzed = await generateGeminiJson<{ answers?: { questionId: string; isCorrect: boolean; feedback: string; solution: string }[] }>(
+      `Carefully grade every quiz answer. Do not award credit for an unsupported guess. For each question, compare the student's response with the expected answer, explain what was correct or missing, and provide a clear worked solution. Preserve the question IDs exactly.
+Questions and answers:
+${questions.map((question) => `ID: ${question.id}\nQuestion: ${question.prompt}\nExpected answer: ${question.correctAnswer}\nReference explanation: ${question.explanation}\nStudent response: ${responses[question.id] || '(blank)'}`).join('\n\n')}`,
+      {
+        type: Type.OBJECT,
+        properties: {
+          answers: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                questionId: { type: Type.STRING },
+                isCorrect: { type: Type.BOOLEAN },
+                feedback: { type: Type.STRING },
+                solution: { type: Type.STRING },
+              },
+              required: ['questionId', 'isCorrect', 'feedback', 'solution'],
+            },
+          },
+        },
+        required: ['answers'],
+      }
+    );
+    if (!analyzed.answers || analyzed.answers.length !== questions.length) return fallbackResult;
+    const reviewedAnswers = fallbackResult.answers.map((answer) => {
+      const review = analyzed.answers?.find((item) => item.questionId === answer.questionId);
+      const question = questions.find((item) => item.id === answer.questionId);
+      if (!review || !question) return answer;
+      return { ...answer, isCorrect: review.isCorrect, score: review.isCorrect ? question.maxScore : 0, feedback: review.feedback, solution: review.solution };
+    });
+    const reviewedTotal = reviewedAnswers.reduce((sum, answer) => sum + answer.score, 0);
+    return { ...fallbackResult, answers: reviewedAnswers, totalScore: reviewedTotal, percentage: maxScore > 0 ? Math.round((reviewedTotal / maxScore) * 100) : 0 };
+  } catch (error) {
+    console.warn('Detailed AI grading unavailable; using local answer analysis:', error);
+    return fallbackResult;
+  }
+}
+
+function normalizeAnswer(value: string): string {
+  return value.toLowerCase().replace(/[`*_.,!?;:()[\]{}]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function buildAssessmentAnswer(question: AssessmentQuestion, response: string): AssessmentResult['answers'][number] {
+  const normalizedResponse = normalizeAnswer(response);
+  const normalizedExpected = normalizeAnswer(question.correctAnswer);
+  const optionCorrect = question.options?.some((option) => option.isCorrect && normalizeAnswer(option.label) === normalizedResponse) ?? false;
+  const isCorrect = Boolean(normalizedResponse) && (normalizedResponse === normalizedExpected || optionCorrect);
+  return {
+    questionId: question.id,
+    response,
+    score: isCorrect ? question.maxScore : 0,
+    isCorrect,
+    conceptId: question.conceptId,
+    feedback: isCorrect ? 'Correct. Your response matches the expected answer.' : `Review this response carefully. Expected: ${question.correctAnswer}`,
+    solution: question.explanation,
+    question: question.prompt,
+    expectedAnswer: question.correctAnswer,
+  };
 }
 
 // ---------- Learning report ----------
