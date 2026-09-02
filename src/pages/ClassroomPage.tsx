@@ -14,7 +14,7 @@ import {
   Clock, BookOpen, HelpCircle, Eye, Code, Calculator, FlaskConical, Scroll, Zap,
   ChevronRight, RotateCcw, Sparkles, MessageSquare, Copy, Loader2,
 } from 'lucide-react';
-import { DEFAULT_TEACHER_PERSONAS, type Question, type Evaluation, type SubjectType, type ChatMessage } from '@/models';
+import { TEACHER_PERSONAS, type Question, type Evaluation, type SubjectType, type ChatMessage } from '@/models';
 
 const subjectIcons: Record<SubjectType, typeof Code> = {
   Mathematics: Calculator,
@@ -221,7 +221,7 @@ export default function ClassroomPage() {
   const [greetingError, setGreetingError] = useState<string | null>(null);
   const [visualTab, setVisualTab] = useState<'visuals' | 'notes' | 'code'>('visuals');
   const [avatarSession, setAvatarSession] = useState<AvatarSession>(() => avatarService.getSession());
-  const [selectedPersonaId, setSelectedPersonaId] = useState(DEFAULT_TEACHER_PERSONAS[1].id);
+  const [selectedPersonaId, setSelectedPersonaId] = useState(TEACHER_PERSONAS[1].id);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const executeTurnRef = useRef<(message?: string, skipAdvance?: boolean) => Promise<void>>();
 
@@ -231,7 +231,7 @@ export default function ClassroomPage() {
   const lessonConcepts = lesson?.concepts || [];
   const currentSegment = lessonSegments[segmentIndex];
   const currentConcept = lessonConcepts.find((c) => c.id === currentSegment?.conceptId);
-  const selectedPersona = DEFAULT_TEACHER_PERSONAS.find((persona) => persona.id === selectedPersonaId) || DEFAULT_TEACHER_PERSONAS[1];
+  const selectedPersona = TEACHER_PERSONAS.find((persona) => persona.id === selectedPersonaId) || TEACHER_PERSONAS[1];
   const fallbackVisual: SuggestedVisual = {
     type: 'diagram',
     title: `${lesson?.topic || 'Lesson'} concept map`,
@@ -267,7 +267,8 @@ export default function ClassroomPage() {
           [],
           undefined,
           retrievedContext.length > 0 ? retrievedContext : undefined,
-          student.language
+          student.language,
+          selectedPersona
         );
         setTeacherMessage(response.teacherMessage);
         if (typeof response.confidence === 'number') {
@@ -294,7 +295,7 @@ export default function ClassroomPage() {
     };
 
     initializeLesson();
-  }, [lesson, navigate, retrievedContext, student]);
+  }, [clampUnderstanding, lesson, navigate, retrievedContext, selectedPersona, student]);
 
   useEffect(() => {
     const unsubscribe = avatarService.subscribe(setAvatarSession);
@@ -404,7 +405,8 @@ export default function ClassroomPage() {
           turnHistory,
           userMessage,
           retrievedContext.length > 0 ? retrievedContext : undefined,
-          student.language
+          student.language,
+          selectedPersona
         );
 
         setTeacherMessage(response.teacherMessage);
@@ -491,7 +493,8 @@ export default function ClassroomPage() {
         updatedHistory,
         message,
         retrievedContext.length > 0 ? retrievedContext : undefined,
-        student.language
+        student.language,
+        selectedPersona
       );
 
       const teacherTurn: ChatMessage = {
@@ -516,7 +519,7 @@ export default function ClassroomPage() {
       setIsThinking(false);
       setIsSubmittingTurn(false);
     }
-  }, [currentSegment?.conceptId, history, isThinking, isSubmittingTurn, lesson, lessonConcepts, retrievedContext, speakTeacherMessage, student]);
+  }, [currentSegment?.conceptId, history, isThinking, isSubmittingTurn, lesson, lessonConcepts, retrievedContext, selectedPersona, speakTeacherMessage, student]);
 
   const advanceSegment = useCallback(() => {
     if (!lesson) return;
@@ -709,7 +712,7 @@ export default function ClassroomPage() {
                 onChange={(event) => setSelectedPersonaId(event.target.value)}
                 className="max-w-[9rem] bg-transparent font-semibold text-white outline-none"
               >
-                {DEFAULT_TEACHER_PERSONAS.map((persona) => <option key={persona.id} value={persona.id} className="bg-ink-900">{persona.name}</option>)}
+                {TEACHER_PERSONAS.map((persona) => <option key={persona.id} value={persona.id} className="bg-ink-900">{persona.name}</option>)}
               </select>
             </label>
             <button
@@ -770,21 +773,6 @@ export default function ClassroomPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Left: Teacher + interaction */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Teacher avatar + message */}
-            <div className="glass-card p-6">
-              <AIAvatar
-                avatarUrl={avatarSession.streamUrl || selectedPersona.avatarUrl || undefined}
-                isSpeaking={isSpeaking || avatarSession.isTalking}
-                transcript={isThinking ? 'AI Teacher is thinking...' : teacherMessage}
-                personaName={selectedPersona.name}
-              />
-              <div className="mt-3 border-t border-white/5 pt-3 text-xs text-slate-400">
-                <span className="font-semibold text-violet-200">{selectedPersona.title}</span>
-                <span className="mx-2 text-slate-600">·</span>
-                {selectedPersona.style}
-              </div>
-            </div>
-
             {/* Interaction area */}
             {awaitingAnswer && currentQuestion && (
               <div className="glass-card p-6 animate-fade-in-up">
@@ -928,8 +916,8 @@ export default function ClassroomPage() {
                     void handleSendMessage(answerInput);
                   }
                 }}
-                placeholder={isListening ? 'Listening…' : 'Ask Prof. Nova or share your answer…'}
-                aria-label="Message Prof. Nova"
+                placeholder={isListening ? 'Listening…' : `Ask ${selectedPersona.name} or share your answer…`}
+                aria-label={`Message ${selectedPersona.name}`}
                 rows={1}
                 className="input-field min-h-[44px] flex-1 resize-none py-2.5"
               />
@@ -965,6 +953,15 @@ export default function ClassroomPage() {
 
           {/* Right: Visuals + progress */}
           <div className="space-y-4">
+            <div className="glass-card p-4">
+              <AIAvatar
+                isSpeaking={isSpeaking || avatarSession.isTalking}
+                state={isThinking ? 'thinking' : avatarSession.state}
+                transcript={isThinking ? `${selectedPersona.name} is thinking...` : teacherMessage}
+                persona={selectedPersona}
+              />
+            </div>
+
             {/* Subject visual or AI-generated visual */}
             <div className="glass-card p-6">
               <div className="flex items-center justify-between gap-2 mb-4">

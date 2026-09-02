@@ -8,7 +8,9 @@ import type {
   SubjectType,
   TeachingStyle,
   Language,
+  TeacherPersona,
 } from '@/models';
+import { TEACHER_PERSONAS } from '@/models';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 if (!apiKey) console.warn("VITE_GEMINI_API_KEY is empty or undefined in import.meta.env");
@@ -146,7 +148,8 @@ function buildSystemPrompt(
   currentConcept: Concept,
   retrievedContext?: string[],
   preferredLanguage: Language = student.language,
-  acceleratedPractice = false
+  acceleratedPractice = false,
+  persona: TeacherPersona = TEACHER_PERSONAS[1]
 ): string {
   const languageMap: Record<Language, string> = {
     English: 'English',
@@ -198,6 +201,12 @@ Keep teacherMessage to 1-3 short sentences with no fluff.`
 - Concept Description: ${currentConcept.description}
 - Difficulty Level: ${currentConcept.difficulty}/5
 - Estimated Time: ${currentConcept.estimatedMinutes} minutes
+
+## Active AI Guide
+- Guide: ${persona.name} (${persona.title})
+- Style: ${persona.style}
+- Evaluation strictness: ${persona.evaluationStrictness}
+- Guide instructions: ${persona.promptStyle}
 
 ## Teaching Methodology: SOCRATIC METHOD
 You MUST follow this 5-stage process:
@@ -271,6 +280,7 @@ Always provide the response as valid JSON. No markdown code blocks, just pure JS
  * @param chatHistory Previous messages in this teaching session
  * @param userMessage Optional - the student's latest response to process
  * @param retrievedContext Optional - relevant document chunks from RAG system
+ * @param persona The guide whose teaching voice should shape this turn
  * @returns Structured teaching response
  */
 export async function continueTeachingTurn(
@@ -280,7 +290,8 @@ export async function continueTeachingTurn(
   chatHistory: ChatMessage[] = [],
   userMessage?: string,
   retrievedContext?: string[],
-  language?: Language
+  language?: Language,
+  persona: TeacherPersona = TEACHER_PERSONAS[1]
 ): Promise<TeachingResponse> {
   try {
     // Validate inputs
@@ -297,7 +308,7 @@ export async function continueTeachingTurn(
 
     // Build the system prompt with pedagogical context
     const acceleratedPractice = isAcceleratedPracticePrompt(userMessage);
-    const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage, acceleratedPractice);
+    const systemPrompt = buildSystemPrompt(student, lesson, currentConcept, retrievedContext, activeLanguage, acceleratedPractice, persona);
 
     // Build conversation history for context
     const safeChatHistory = Array.isArray(chatHistory) ? chatHistory : [];

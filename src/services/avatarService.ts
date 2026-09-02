@@ -1,4 +1,4 @@
-import type { TeachingVideo } from '@/models';
+import type { TeacherPersona, TeachingVideo } from '@/models';
 
 export type AvatarProvider = 'browser' | 'heygen' | 'did';
 export type AvatarState = 'idle' | 'speaking' | 'thinking';
@@ -86,13 +86,19 @@ export const getAvatarState = () => avatarService.getState();
 export async function generateTeachingVideo(
   conceptName: string,
   language: string,
-  persona: string
+  persona: TeacherPersona
 ): Promise<TeachingVideo> {
+  const teachingApproach = persona.id === 'prof-hardik'
+    ? `Let us prove the idea carefully, then test its edge cases.`
+    : persona.id === 'prof-nova'
+      ? `Let us make it intuitive with a friendly analogy and a visual example.`
+      : `Let us turn it into a practical implementation with production-minded tips.`;
+
   return {
     id: `teaching-video-${Date.now()}`,
     url: '',
     durationSeconds: 0,
     status: 'ready',
-    transcript: `${persona} is ready to teach ${conceptName} in ${language}.`,
+    transcript: `${persona.name} is ready to teach ${conceptName} in ${language}. ${teachingApproach}`,
   };
 }

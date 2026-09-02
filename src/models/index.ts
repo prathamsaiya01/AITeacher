@@ -32,34 +32,41 @@ export interface TeacherPersona {
   style: string;
   avatarUrl: string;
   promptStyle: string;
+  evaluationStrictness: 'easy' | 'moderate' | 'rigorous';
 }
 
-export const DEFAULT_TEACHER_PERSONAS: TeacherPersona[] = [
+export const TEACHER_PERSONAS: TeacherPersona[] = [
   {
     id: 'prof-hardik',
     name: 'Prof. Hardik',
-    title: 'The Rigorous Socratic Checker',
+    title: 'Strict & Rigorous Socratic Teacher',
     style: 'Strict, rigorous, and precise',
-    avatarUrl: '',
-    promptStyle: 'Focus on edge cases, precise terminology, deep conceptual proofs, and challenging assumptions. Do not reward a lucky guess without sound reasoning.',
+    avatarUrl: 'https://i.pravatar.cc/160?img=12',
+    promptStyle: 'Focus on technical precision, edge cases, mathematical proofs, and clear reasoning. Challenge misconceptions aggressively and test boundary conditions. Flag vague answers and do not reward lucky guesses without sound reasoning.',
+    evaluationStrictness: 'rigorous',
   },
   {
     id: 'prof-nova',
     name: 'Prof. Nova',
-    title: 'The Empathetic Concept Guide',
+    title: 'Empathetic & Visual Educator',
     style: 'Clear, empathetic, and analogy-driven',
-    avatarUrl: '',
-    promptStyle: 'Reward conceptual intuition, explain ideas with approachable analogies and visual examples, and make difficult ideas feel manageable without losing accuracy.',
+    avatarUrl: 'https://i.pravatar.cc/160?img=47',
+    promptStyle: 'Focus on analogies, real-world examples, and beginner-friendly breakdowns. Give soft, encouraging feedback and use intuitive visual explanations without losing accuracy.',
+    evaluationStrictness: 'easy',
   },
   {
     id: 'captain-code',
-    name: 'Captain Code',
-    title: 'The Practical Application Mentor',
+    name: 'Mentor Alex',
+    title: 'Practical Application Specialist',
     style: 'Fast-paced, practical, and real-world focused',
-    avatarUrl: '',
-    promptStyle: 'Move quickly toward practical application, use real-world scenarios and hands-on challenges, and prioritize useful implementation over abstract exposition.',
+    avatarUrl: 'https://i.pravatar.cc/160?img=68',
+    promptStyle: 'Focus on real-world implementations, hands-on examples, and production tips. Keep the pace fast and direct, and provide practical code or real-world application examples whenever relevant.',
+    evaluationStrictness: 'moderate',
   },
 ];
+
+/** Backwards-compatible name used by existing classroom and setup flows. */
+export const DEFAULT_TEACHER_PERSONAS = TEACHER_PERSONAS;
 
 export type QuestionType =
   | 'MCQ'
@@ -279,7 +286,7 @@ export interface DashboardStats {
 
 export interface TeachingVideo {
   id: string;
-  url: string;
+  url?: string;
   durationSeconds: number;
   status: 'generating' | 'ready' | 'error';
   transcript: string;

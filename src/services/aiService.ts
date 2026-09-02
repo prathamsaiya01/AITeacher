@@ -22,6 +22,7 @@ import type {
   SubjectType,
   TeacherPersona,
 } from '@/models';
+import { TEACHER_PERSONAS } from '@/models';
 import { processDocument } from './documentService';
 import { storeDocumentInSupabase } from './ragService';
 import { getStudentMemoryContext, getStudentProgress } from './studentService';
@@ -339,7 +340,8 @@ export async function generateLesson(
   student: Student,
   topic: string,
   document?: UploadedDocument,
-  extraParams?: Partial<GenerateLessonParams>
+  extraParams?: Partial<GenerateLessonParams>,
+  persona: TeacherPersona = TEACHER_PERSONAS[1]
 ): Promise<Lesson> {
   const subject = detectSubject(topic);
   const studentLevel = extraParams?.studentLevel || student.level || 'Intermediate';
@@ -364,6 +366,12 @@ export async function generateLesson(
 - Teaching Style: ${teachingStyle}
 - Available Time: ${availableTime}
 - Desired Depth: ${desiredDepth}${documentContext}${memoryContext}
+
+## Active AI Guide
+- Guide: ${persona.name} (${persona.title})
+- Style: ${persona.style}
+- Evaluation strictness: ${persona.evaluationStrictness}
+- Guide instructions: ${persona.promptStyle}
 
 Use the selected time budget to determine scope, pacing, and depth. For short lessons, compress explanations and prioritize essential concepts. For long lessons, spread the topic across multiple sections or days. Do NOT spend the full time on an introduction. The lesson must feel qualitatively different for a 5-minute lesson, 20-minute lesson, 60-minute lesson, and 7-day plan.
 
@@ -602,7 +610,7 @@ const questionTemplates: Record<SubjectType, Question[]> = {
   ],
 };
 
-export async function generateQuestion(conceptId: string, subject: SubjectType, difficulty: number, persona: TeacherPersona): Promise<Question> {
+export async function generateQuestion(conceptId: string, subject: SubjectType, difficulty: number, persona: TeacherPersona = TEACHER_PERSONAS[1]): Promise<Question> {
   await delay(600);
   const templates = questionTemplates[subject] || questionTemplates.General;
   const personaDifficulty = persona.id === 'prof-hardik' ? Math.min(5, difficulty + 1) : persona.id === 'captain-code' ? Math.max(1, difficulty) : difficulty;
@@ -626,7 +634,7 @@ async function generateGeminiJson<T>(prompt: string, responseSchema: Schema): Pr
 }
 
 // ---------- Answer evaluation ----------
-export async function evaluateAnswer(question: Question, answer: Answer, persona: TeacherPersona): Promise<Evaluation> {
+export async function evaluateAnswer(question: Question, answer: Answer, persona: TeacherPersona = TEACHER_PERSONAS[1]): Promise<Evaluation> {
   const fallbackCorrect = answer.response.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase();
   const fallback: Evaluation = fallbackCorrect
     ? { isCorrect: true, feedback: `${persona.name}: Good work. Now justify the idea one level more deeply.`, newDifficulty: Math.min(5, question.difficulty + 1), understandingDelta: 8, shouldReExplain: false }
@@ -668,6 +676,7 @@ export async function detectMisconception(question: Question, answer: Answer): P
     style: 'Clear, empathetic, and analogy-driven',
     avatarUrl: '',
     promptStyle: 'Reward conceptual intuition and explain ideas with approachable analogies.',
+    evaluationStrictness: 'easy',
   });
   return ev.misconception || null;
 }
